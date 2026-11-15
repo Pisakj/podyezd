@@ -481,14 +481,12 @@ box(HALL_W + SW + 0.2, 0.2, HALL_D + LAND_END + 0.2, (SW - HALL_W) / 2, FLOORS *
 // garbage chute
 { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, FLOORS * H, 14), mat({ color: 0x35423c })); c.position.set(0.28, FLOORS * H / 2, LAND_END - 0.28); world.add(c); }
 // what is heard behind each door: seven recordings for eleven flats, the rest are silent
+// What is heard behind the doors. Only ordinary household sounds, and only three flats out of eleven per run: the rest is silence.
 // live: [on min, on max, off min, off max] seconds. gap: pause between one-shots. shy: stops when you come to the door
-const DOOR_SND = { baby: { vol: 0.2, lp: 500, live: [8, 20, 15, 45] }, clock: { vol: 0.22, lp: 1200 }, cough: { vol: 0.25, lp: 600, gap: [10, 30] },
-  musicbox: { vol: 0.14, lp: 800, live: [10, 22, 20, 50] }, snore: { vol: 0.28, lp: 450 }, talk: { vol: 0.2, lp: 500, shy: true, live: [6, 18, 5, 20] },
-  whisper: { vol: 0.3, lp: 1500, gap: [4, 12], shy: true }, phone: { vol: 0.2, lp: 900, live: [8, 14, 40, 90] }, hum: { vol: 0.25, lp: 800, shy: true, live: [8, 20, 10, 30] },
-  piano: { vol: 0.2, lp: 700, live: [8, 20, 6, 25] }, cry: { vol: 0.2, lp: 600, shy: true, live: [8, 18, 20, 50] }, scratch: { vol: 0.3, lp: 2000, gap: [8, 25] },
-  drip: { vol: 0.25, lp: 1400 }, radio: { vol: 0.18, lp: 800, live: [15, 40, 5, 15] }, laugh: { vol: 0.2, lp: 800, gap: [20, 60] } };
-// each run eight of the fifteen are behind eight of the eleven flats; the other three flats are silent
-{ const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, 8).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
+const DOOR_SND = { clock: { vol: 0.22, lp: 1200 }, snore: { vol: 0.28, lp: 450 }, talk: { vol: 0.2, lp: 500, shy: true, live: [6, 18, 5, 20] },
+  radio: { vol: 0.18, lp: 800, live: [15, 40, 5, 15] }, drip: { vol: 0.25, lp: 1400 }, cough: { vol: 0.25, lp: 600, gap: [10, 30] } };
+const DOOR_SND_COUNT = 3;
+{ const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, DOOR_SND_COUNT).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
 world.traverse(m => { if (m.isMesh && m.material.isMeshLambertMaterial !== false && !m.material.isMeshBasicMaterial) { m.castShadow = !m.material.transparent; m.receiveShadow = true; } });
 
 // things at the edge of sight. There is no body to look at: two faint points in the dark that are not there
@@ -954,7 +952,7 @@ function updateFollower(dt, moving) {
 }
 
 // ---------- world randomness ----------
-let blackoutT = rand(25, 50), farT = rand(12, 25), eventCd = 8;
+let blackoutT = rand(25, 50), farT = rand(40, 90), eventCd = 8;
 const doorState = { af: 0, lf: 0, done: {} };
 function pickDoor(n) { const ds = doors.filter(d => d.floor === n && !d.own && d.ajar === 0 && !d.kind); return ds[Math.floor(Math.random() * ds.length)]; }
 function updateWorld(dt) {
@@ -1026,7 +1024,7 @@ function updateWorld(dt) {
   // distant life of the house
   farT -= dt;
   if (farT <= 0) {
-    farT = rand(18, 45);
+    farT = rand(40, 90);
     const pos = new THREE.Vector3(rand(-3, 2), P.y + rand(4, 9), rand(-3, 3));
     const r = Math.random();
     if (r < 0.3) { const f0 = rand(500, 900); for (let i = 0; i < 3; i++) tick(f0, 0.025, i * rand(0.25, 0.4)); }             // pipes
