@@ -1,6 +1,6 @@
 # Podyezd
 
-First-person browser horror game in a single file. Night stairwell of a panel house, the player walks up to their flat while someone follows one floor below.
+First-person browser horror game: `index.html` plus `sounds.js` (recorded sounds in base64, sources in `SOUNDS.md`). Night stairwell of a panel house, the player walks up to their flat while someone follows one floor below.
 
 ## Run
 

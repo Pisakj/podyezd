@@ -19,6 +19,7 @@
   #paper ol { margin: 0; padding-left: 24px; }
   #paper .sign { margin-top: 16px; text-align: right; font-style: italic; }
   #paper .close { margin-top: 14px; text-align: center; font-size: 12px; color: #6d675a; }
+  #peek { position: fixed; inset: 0; width: 100%; height: 100%; display: none; image-rendering: pixelated; }
   #paper li.x { text-decoration: line-through; text-decoration-color: #7a1612; text-decoration-thickness: 2px; color: #6b665a; }
   #paper .hand { font-family: 'Marker Felt', 'Comic Sans MS', cursive; color: #1c2c6b; font-size: 17px; margin-top: 10px; transform: rotate(-2deg); }
   #end { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
@@ -33,6 +34,7 @@
 <div id="dot"></div>
 <div id="hint"></div>
 <div id="msg"></div>
+<canvas id="peek"></canvas>
 <div id="paper"></div>
 <div id="end"><p>Ты дома.</p><p>За дверью тихо.</p><p>Он тоже дошёл.</p><h1>ПОДЪЕЗД</h1><small>R — пройти снова</small></div>
 <div id="overlay">
@@ -42,6 +44,7 @@
   <p class="go" id="go">Нажми, чтобы войти</p>
 </div>
 
+<script src="sounds.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
@@ -244,7 +247,9 @@ function buildDoor(x, y, z, ry, m, number, floor) {
   const p = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.09), mat({ map: labelTex(String(number), { bg: '#b9a878', font: 'bold 84px Arial' }) }));
   p.position.set(0.45, 1.75, 0.037); leaf.add(p);
   box(0.8, 0.02, 0.45, 0, 0.01, 0.3, mMat, g);
-  doors.push({ pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, peeped: false, knocked: false, floor, silenced: false, own: floor === FLOORS - 1 && x === 1.0 });
+  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, peeped: false, knocked: false, floor, silenced: false, own: floor === FLOORS - 1 && x === 1.0 };
+  doors.push(d);
+  interact.push({ pos: d.pos, label: 'заглянуть в щель', on: () => leaf.rotation.y > 0.25 && !pk.on, act: () => startPeek(d) });
   return g;
 }
 const mVoid = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
@@ -475,35 +480,100 @@ for (let n = 0; n < FLOORS; n++) {
 box(HALL_W + SW + 0.2, 0.2, HALL_D + LAND_END + 0.2, (SW - HALL_W) / 2, FLOORS * H - 0.1, (LAND_END - HALL_D) / 2, mCeil);
 // garbage chute
 { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, FLOORS * H, 14), mat({ color: 0x35423c })); c.position.set(0.28, FLOORS * H / 2, LAND_END - 0.28); world.add(c); }
+// what is heard behind each door: seven recordings for eleven flats, the rest are silent
+const DOOR_SND = { baby: { vol: 0.5, lp: 600 }, clock: { vol: 0.55, lp: 1500 }, cough: { vol: 0.6, lp: 700, gap: [8, 20] }, musicbox: { vol: 0.35, lp: 900 },
+  snore: { vol: 0.7, lp: 500 }, talk: { vol: 0.5, lp: 550, shy: true }, whisper: { vol: 0.8, lp: 1800, gap: [3, 8], shy: true } };
+{ const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
 world.traverse(m => { if (m.isMesh && m.material.isMeshLambertMaterial !== false && !m.material.isMeshBasicMaterial) { m.castShadow = !m.material.transparent; m.receiveShadow = true; } });
 
-// the figure: only ever at the edge of the torch, one flight below, gone when you look straight at it
-const fig = new THREE.Group(); fig.visible = false; world.add(fig);
-{ const m = new THREE.MeshBasicMaterial({ color: 0x010102 });
-  box(0.34, 0.95, 0.2, 0, 1.3, 0, m, fig); box(0.13, 0.86, 0.14, -0.09, 0.43, 0, m, fig); box(0.13, 0.86, 0.14, 0.09, 0.43, 0, m, fig);
-  box(0.08, 1.05, 0.08, -0.24, 1.22, 0, m, fig); box(0.08, 1.05, 0.08, 0.24, 1.22, 0, m, fig);
-  const h = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), m); h.position.set(0.04, 1.95, 0.02); fig.add(h); }
-const G = { cd: rand(35, 60), on: false, look: 0, life: 0 };
-function updateFigure(dt) {
+// the peeker: part of a head around a corner, at the edge of the screen. Pulls back as your eyes come near.
+// Mostly it is black on black and only two faint points show; the torch catches the shape just as it goes.
+const peeker = new THREE.Group(); peeker.visible = false; world.add(peeker);
+{ const m = new THREE.MeshBasicMaterial({ color: 0x020203 });
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 10), m); head.scale.set(0.9, 1.15, 1); peeker.add(head);
+  box(0.36, 0.3, 0.2, 0, -0.33, 0, m, peeker);
+  const em = new THREE.MeshBasicMaterial({ color: 0x55554a });
+  for (const sx of [-0.037, 0.037]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 5), em); e.position.set(sx, 0.015, 0.098); peeker.add(e); } }
+const G = { cd: 30, on: false, k: 0, out: false, life: 0, show: new THREE.Vector3(), hide: new THREE.Vector3() };
+function peekSpots() {
+  const n = Math.round(P.y / H), onFloor = Math.abs(P.y - n * H) < 0.05, y0 = n * H, list = [];
+  if (onFloor && P.z < -0.3 && n >= 1) list.push([BXC - 0.15, y0 + 0.02, 0.75, BXC - 0.15, y0 - 0.5, 0.75]);                       // top of a head above the floor edge, on the stairs down
+  if (onFloor && P.z < -0.3 && n <= FLOORS - 2) list.push([MIDX, y0 + 2.52, RUN - 0.12, MIDX, y0 + 2.52, RUN + 0.6]);             // leaning over the rail one landing up
+  const fl = Math.floor(P.y / H);
+  if (P.x > MIDX && P.z > 0.2 && P.z < 1.7 && fl <= FLOORS - 2) list.push([0.5, fl * H + 3.0, LAND_END - 0.33, 0.3, fl * H + 3.0, LAND_END - 0.24]);   // from behind the chute ahead
+  return list;
+}
+function updatePeeker(dt) {
   G.cd -= dt; camera.getWorldDirection(vDir);
   if (!G.on) {
-    if (G.cd > 0 || !F.active || F.c < 0.3 || E.t >= 0 || C.t >= 0) return;
-    let x, z;
-    if (P.z < 0 && P.y > H - 0.1 && Math.abs(P.y / H - Math.round(P.y / H)) < 0.02) { x = 1.5; z = LAND_END - 0.45; }   // you are in a hall: it is by the window below
-    else if (P.z > RUN) { x = AXC; z = -0.8; }                                                                          // you are on a landing: it is in the hall below
-    else return;
-    const y = P.y - 1.5;
-    if (vTo.set(x, y + 1.6, z).sub(camera.position).normalize().dot(vDir) > 0.25) return;   // never appears while you look that way
-    fig.position.set(x, y, z); fig.rotation.y = Math.atan2(P.x - x, P.z - z); fig.visible = true;
-    G.on = true; G.look = 0; G.life = 0;
-  } else {
-    G.life += dt;
-    vTo.set(fig.position.x, fig.position.y + 1.6, fig.position.z).sub(camera.position);
-    const dist = vTo.length(), dot = vTo.normalize().dot(vDir);
-    if (dot > 0.965) G.look += dt;
-    const seen = G.look > 0.4 || dist < 3;
-    if (seen || (G.life > 14 && dot < 0.2)) { fig.visible = false; G.on = false; G.cd = rand(50, 90); if (seen) { blinkT = 0.14; tick(1600, 0.02); } }
+    if (G.cd > 0 || !F.active || T < 40 || E.t >= 0 || C.t >= 0 || pk.on || reading) return;
+    for (const sp of peekSpots()) {
+      const dot = vTo.set(sp[0], sp[1], sp[2]).sub(camera.position).normalize().dot(vDir);
+      if (dot < 0.55 || dot > 0.9 || Math.random() < 0.5) continue;       // must be on screen, but off to the side
+      G.show.set(sp[0], sp[1], sp[2]); G.hide.set(sp[3], sp[4], sp[5]);
+      G.on = true; G.k = 0; G.out = true; G.life = 0; peeker.visible = true; break;
+    }
+    if (!G.on) return;
   }
+  G.life += dt;
+  vTo.copy(G.show).sub(camera.position); const dist = vTo.length(), dot = vTo.normalize().dot(vDir);
+  if (G.out && (dot > 0.955 || dist < 2 || G.life > 6)) G.out = false;
+  G.k = clamp(G.k + (G.out ? dt / 0.9 : -dt / 0.22), 0, 1);
+  peeker.position.lerpVectors(G.hide, G.show, G.k * G.k * (3 - 2 * G.k));
+  peeker.rotation.y = Math.atan2(P.x - peeker.position.x, P.z - peeker.position.z);
+  if (!G.out && G.k === 0) { peeker.visible = false; G.on = false; G.cd = rand(30, 60); }
+}
+
+// looking through the gap of a door that stands ajar
+const pk = { on: false, d: null, t: 0, yaw0: 0 };
+const pc = document.getElementById('peek'), pg = pc.getContext('2d');
+const HINTS = { switch: ['ВЫКЛЮЧАТЕЛЬ', 'НЕ ПРО СВЕТ'], back: ['ВСТАНЬ СПИНОЙ', 'К РЕШЁТКЕ'], loop: ['ВВЕРХ —', 'ЭТО ВНИЗ'] };
+const STRANGE = ['head', 'chair', 'block', 'fifteen'].sort(() => Math.random() - 0.5);
+function startPeek(d) {
+  if (!d.kind) d.kind = d.wantHint ? 'hint' : (STRANGE.pop() || 'chair');
+  pk.on = true; pk.d = d; pk.t = 0; pk.yaw0 = P.yaw;
+  pc.width = Math.round(innerWidth / 2.5); pc.height = Math.round(innerHeight / 2.5); pc.style.display = 'block';
+}
+function endPeek() {
+  if (!pk.on) return;
+  pk.on = false; pc.style.display = 'none'; pk.d.ajar = 0;
+}
+function drawPeek(dt) {
+  pk.t += dt; const W = pc.width, Hh = pc.height, g = pg, kind = pk.d.kind, t = pk.t;
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, Hh);
+  const sw = W * 0.16, sx = (W - sw) / 2;
+  g.save(); g.beginPath(); g.rect(sx, 0, sw, Hh); g.clip();
+  g.translate(W / 2 + clamp((P.yaw - pk.yaw0) * W * 0.5, -W * 0.15, W * 0.15), Hh / 2);   // turn your head to see a little more
+  const fw = W * 0.17, fh = Hh * 0.33, flick = 0.82 + 0.18 * Math.sin(t * 13) * Math.sin(t * 5.3);
+  g.fillStyle = '#090807'; g.fillRect(-W, -Hh, 2 * W, 2 * Hh);
+  g.fillStyle = '#17110c'; g.beginPath(); g.moveTo(-W * 0.7, Hh * 0.5); g.lineTo(W * 0.7, Hh * 0.5); g.lineTo(fw, fh); g.lineTo(-fw, fh); g.fill();       // floor
+  g.fillStyle = '#0c0b0a'; g.beginPath(); g.moveTo(-W * 0.7, -Hh * 0.5); g.lineTo(W * 0.7, -Hh * 0.5); g.lineTo(fw, -fh); g.lineTo(-fw, -fh); g.fill();   // ceiling
+  g.fillStyle = '#15120f'; g.fillRect(-fw, -fh, 2 * fw, 2 * fh);                                                                                       // far wall
+  const dw = fw * 0.4, dh = fh * 1.45, dy = fh - dh;
+  const gr = g.createLinearGradient(0, dy, 0, fh); gr.addColorStop(0, `rgba(160,112,52,${0.6 * flick})`); gr.addColorStop(1, `rgba(70,46,22,${0.55 * flick})`);
+  g.fillStyle = gr; g.fillRect(-dw, dy, 2 * dw, dh);                                                                                                   // lit doorway at the far end
+  g.fillStyle = `rgba(120,80,35,${0.16 * flick})`; g.beginPath(); g.moveTo(-dw, fh); g.lineTo(dw, fh); g.lineTo(dw * 2.6, Hh * 0.5); g.lineTo(-dw * 2.6, Hh * 0.5); g.fill();
+  g.fillStyle = '#040303';
+  if (kind === 'chair') { g.fillRect(-dw * 0.4, fh - dh * 0.62, dw * 0.8, dh * 0.34); g.fillRect(-dw * 0.4, fh - dh * 0.3, dw * 0.08, dh * 0.3); g.fillRect(dw * 0.32, fh - dh * 0.3, dw * 0.08, dh * 0.3); g.fillRect(-dw * 0.44, fh - dh * 0.3, dw * 0.88, dh * 0.05); }
+  if (kind === 'head') {   // someone looks out from behind the far doorframe, then is not there
+    const off = t < 2.6 ? 0.16 : 0.16 - Math.min(1, (t - 2.6) / 0.5) * 0.5;
+    g.save(); g.beginPath(); g.rect(-dw, dy, 2 * dw, dh); g.clip();
+    g.beginPath(); g.ellipse(-dw + off * dw, dy + dh * 0.27, dw * 0.2, dw * 0.26, 0, 0, 7); g.fill(); g.fillRect(-dw - dw * 0.3 + off * dw, dy + dh * 0.36, dw * 0.42, dh * 0.3);
+    g.restore();
+  }
+  if (kind === 'hint' || kind === 'fifteen') {
+    const lines = kind === 'hint' ? HINTS[puzzleOf(pk.d.floor)] : ['ОН УЖЕ', 'В 15-й'];
+    g.fillStyle = 'rgba(196,186,160,.8)'; g.font = `bold ${Math.round(fh * 0.115)}px "Marker Felt", "Comic Sans MS", cursive`; g.textAlign = 'center';
+    lines.forEach((l, i) => g.fillText(l, 0, -fh * 0.74 + i * fh * 0.16, fw * 1.9));
+  }
+  g.restore();
+  if (kind === 'block' && t > 1.8) {   // something steps up to the other side of the door
+    const c = Math.min(1, (t - 1.8) / 0.9); g.fillStyle = '#000'; g.fillRect(sx, 0, sw * c, Hh);
+    if (t > 3.3) { thud({ gain: 0.5, cutoff: 600, f0: 100, f1: 50, len: 0.1, send: 0.5, pos: pk.d.pos }); endPeek(); return; }
+  }
+  const eg = g.createLinearGradient(sx, 0, sx + sw, 0); eg.addColorStop(0, '#000'); eg.addColorStop(0.3, 'rgba(0,0,0,0)'); eg.addColorStop(0.7, 'rgba(0,0,0,0)'); eg.addColorStop(1, '#000');
+  g.fillStyle = eg; g.fillRect(sx, 0, sw, Hh);
+  for (let i = 0; i < 260; i++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.07})`; g.fillRect(sx + Math.random() * sw, Math.random() * Hh, 1, 1); }
 }
 
 // the lift that does not work
@@ -620,6 +690,7 @@ function findTarget() {
   elHint.style.opacity = best && !reading ? 1 : 0;
 }
 function doAction() {
+  if (pk.on) return endPeek();
   if (reading) return togglePaper(false);
   if (target) target.act();
 }
@@ -649,14 +720,12 @@ function initAudio() {
   A.drone = ctx.createGain(); A.drone.gain.value = 0;
   for (const f of [55, 58.2, 82.7]) { const o = ctx.createOscillator(); o.frequency.value = f; o.connect(A.drone); o.start(); }
   A.drone.connect(A.master);
-  // muffled voices behind one door per floor; they stop when you come close
-  { const m = A.mur = {}; const n = ctx.createBufferSource(); n.buffer = A.noise; n.loop = true;
-    m.osc = ctx.createOscillator(); m.osc.type = 'sawtooth'; m.osc.frequency.value = 120;
-    const ng = ctx.createGain(); ng.gain.value = 0.35; m.bp = ctx.createBiquadFilter(); m.bp.type = 'bandpass'; m.bp.Q.value = 4;
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
-    m.mod = ctx.createGain(); m.dist = ctx.createGain(); m.dist.gain.value = 0; m.pan = panner(new THREE.Vector3());
-    n.connect(ng).connect(m.bp); m.osc.connect(m.bp); m.bp.connect(lp).connect(m.mod).connect(m.dist).connect(m.pan).connect(A.master);
-    n.start(); m.osc.start(); }
+  // recorded sounds
+  A.buf = {};
+  Promise.all(Object.keys(window.SND || {}).map(k => {
+    const bin = atob(window.SND[k]), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return ctx.decodeAudioData(u.buffer).then(b => { A.buf[k] = b; }).catch(() => {});
+  })).then(startDoorSounds);
 }
 function setPos(p, v) { if (p.positionX) { p.positionX.value = v.x; p.positionY.value = v.y; p.positionZ.value = v.z; } else p.setPosition(v.x, v.y, v.z); }
 function panner(v) { const p = A.ctx.createPanner(); p.panningModel = 'HRTF'; p.rolloffFactor = 0; setPos(p, v); return p; }
@@ -692,7 +761,39 @@ function creak(pos) {   // a floorboard behind a door
   g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.09, t + 0.05); g.gain.linearRampToValueAtTime(0, t + 0.42);
   o.connect(f).connect(g).connect(p).connect(A.master); o.start(t); o.stop(t + 0.45);
 }
-function rattle(pos) {   // somebody tries the handle from inside, then one soft knock
+function playBuf(name, pos, gain, lp) {
+  if (!A.buf || !A.buf[name]) return false;
+  const ctx = A.ctx, s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
+  s.buffer = A.buf[name]; f.type = 'lowpass'; f.frequency.value = lp; g.gain.value = gain;
+  s.connect(f).connect(g).connect(p).connect(A.master); const sd = ctx.createGain(); sd.gain.value = 0.3; p.connect(sd).connect(A.conv); s.start();
+  return true;
+}
+function startDoorSounds() {
+  const ctx = A.ctx;
+  for (const d of doors) {
+    if (!d.snd || !A.buf[d.snd]) continue;
+    const c = DOOR_SND[d.snd], lp = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(d.pos);
+    lp.type = 'lowpass'; lp.frequency.value = c.lp; g.gain.value = 0; lp.connect(g).connect(p).connect(A.master);
+    const sd = ctx.createGain(); sd.gain.value = 0.2; p.connect(sd).connect(A.conv);
+    d.au = { lp, g, c };
+    const play = () => { const s = ctx.createBufferSource(); s.buffer = A.buf[d.snd]; s.connect(lp);
+      if (c.gap) { s.onended = () => setTimeout(play, rand(c.gap[0], c.gap[1]) * 1000); s.start(); } else { s.loop = true; s.start(0, Math.random() * s.buffer.duration); } };
+    play();
+  }
+}
+function updateDoorSounds() {
+  const now = A.ctx.currentTime;
+  for (const d of doors) {
+    if (!d.au) continue;
+    const c = d.au.c, dist = camera.position.distanceTo(d.pos), open = d.leaf.rotation.y > 0.2;
+    let v = c.vol * Math.pow(clamp(1 - dist / 6.5, 0, 1), 1.6) * (open ? 1.7 : 1);
+    if (c.shy) { if (dist < 1.7 && !open) d.hush = true; else if (dist > 3.5) d.hush = false; if (d.hush) v = 0; }   // some go quiet when you come to the door
+    d.au.g.gain.setTargetAtTime(v, now, d.hush ? 0.02 : 0.25);
+    d.au.lp.frequency.setTargetAtTime(open ? c.lp * 3.5 : c.lp, now, 0.3);
+  }
+}
+function rattle(pos) {
+  if (playBuf('handle', pos, 0.7, 2500)) { setTimeout(() => playBuf('knock', pos, 0.9, 1300), 2800); return; }   // somebody tries the handle from inside, then one soft knock
   for (let i = 0; i < 5; i++) thud({ gain: 0.22, cutoff: 3200, f0: rand(380, 520), f1: 240, thump: 0.3, noise: 0.7, len: 0.04, send: 0.35, pos, delay: i * 0.085 + rand(0, 0.02) });
   thud({ gain: 0.5, cutoff: 480, f0: 120, f1: 60, len: 0.1, send: 0.5, pos, delay: 1.5 });
 }
@@ -793,7 +894,7 @@ function updateFollower(dt, moving) {
       } else if (!F.arrived) {
         F.arrived = true;
         if (E.t >= 0) breath();
-        else { C.t = 0; C.n++; if (reading) togglePaper(false); tick(1700, 0.03); }
+        else { C.t = 0; C.n++; if (reading) togglePaper(false); endPeek(); tick(1700, 0.03); }
       }
     }
   }
@@ -804,10 +905,9 @@ function updateFollower(dt, moving) {
 }
 
 // ---------- world randomness ----------
-let blackoutT = rand(25, 50), farT = rand(12, 25), eventCd = 8, murT = 0;
-const doorState = { af: 0, lf: 0 };
-function pickDoor(n) { const ds = doors.filter(d => d.floor === n && !d.own && d.ajar === 0 && d !== murDoors[n]); return ds[Math.floor(Math.random() * ds.length)]; }
-const murDoors = {}; for (let n = 1; n <= 3; n++) { const ds = doors.filter(d => d.floor === n); murDoors[n] = ds[Math.floor(Math.random() * ds.length)]; }
+let blackoutT = rand(25, 50), farT = rand(12, 25), eventCd = 8;
+const doorState = { af: 0, lf: 0, done: {} };
+function pickDoor(n) { const ds = doors.filter(d => d.floor === n && !d.own && d.ajar === 0 && !d.kind); return ds[Math.floor(Math.random() * ds.length)]; }
 function updateWorld(dt) {
   blackoutT -= dt; blinkT -= dt;
   if (blackoutT <= 0) {
@@ -845,10 +945,10 @@ function updateWorld(dt) {
     if (d.lit && !d.peeped && dist < 1.3 && dot > 0.92) { d.peeped = true; if (Math.random() < 0.3) setTimeout(() => { d.peep.material.color.set(0x030303); creak(d.pos); }, 600); }
     if (!d.knocked && dot < -0.3 && eventCd <= 0) { d.knocked = true; if (Math.random() < 0.35) { eventCd = 45; rattle(d.pos); } }
   }
-  // doors: one may already stand ajar when you arrive, one may open behind you as you leave; they close when watched
+  // doors: on every floor one already stands ajar when you arrive, one may open behind you as you leave. Look into the gap
   { const af = Math.floor((P.y + 1.5) / H);
     if (af !== doorState.af) {
-      if (af > doorState.af && af >= 1 && af <= 3 && Math.random() < 0.5) { const d = pickDoor(af); if (d) { d.ajar = 0.45; d.leaf.rotation.y = 0.45; } }
+      if (af > doorState.af && af >= 1 && af <= 3 && !doorState.done[af]) { const d = pickDoor(af); if (d) { doorState.done[af] = true; d.wantHint = Math.random() < 0.6; d.ajar = 0.5; d.leaf.rotation.y = 0.5; } }
       doorState.af = af;
     }
     const lf = Math.floor((P.y - 0.9) / H);   // climbed most of the way off a floor
@@ -858,11 +958,10 @@ function updateWorld(dt) {
     }
     for (const d of doors) {
       const a = d.leaf.rotation.y;
-      if (d.ajar > 0) { vTo.copy(d.pos).sub(camera.position); const dist = vTo.length(); if (dist < 2.7 && vTo.normalize().dot(vDir) > 0.9) d.ajar = 0; }
-      if (a !== d.ajar) { const na = a + clamp(d.ajar - a, -dt * 0.55, dt * 0.35); d.leaf.rotation.y = na; if (na === 0) thud({ gain: 0.35, cutoff: 700, f0: 110, f1: 55, len: 0.08, send: 0.5, pos: d.pos }); }
+      if (a !== d.ajar) { const na = a + clamp(d.ajar - a, -dt * 0.9, dt * 0.35); d.leaf.rotation.y = na; if (na === 0) thud({ gain: 0.35, cutoff: 700, f0: 110, f1: 55, len: 0.08, send: 0.5, pos: d.pos }); }
     }
   }
-  updateFigure(dt);
+  updatePeeker(dt); updateDoorSounds();
   updatePuzzles(dt);
   // lift cabin passes behind the closed doors
   if (lift.state === 0 && Math.abs(P.y - lift.floor * H) < 0.2 && P.z < -0.5) { lift.state = 1; lift.t = -2.5; }
@@ -875,13 +974,6 @@ function updateWorld(dt) {
     if (vis) { lift.strip.scale.y = b - a; lift.strip.position.y = (a + b) / 2; lift.light.position.y = (a + b) / 2; }
     if (lift.t > 6) { lift.state = 2; lift.strip.visible = false; lift.light.intensity = 0; }
   }
-  // voices
-  { const now = A.ctx.currentTime, m = A.mur, md = murDoors[clamp(Math.round(P.y / H), 1, 3)];
-    murT -= dt;
-    if (murT <= 0) { murT = rand(0.08, 0.26); m.bp.frequency.setTargetAtTime(rand(350, 1500), now, 0.03); m.mod.gain.setTargetAtTime(Math.random() < 0.2 ? 0 : rand(0.3, 1), now, 0.03); m.osc.frequency.setTargetAtTime(rand(95, 150), now, 0.05); }
-    let g = 0;
-    if (!md.silenced) { const d = camera.position.distanceTo(md.pos); if (d < 2.0) md.silenced = true; else { g = Math.pow(clamp(1 - d / 7, 0, 1), 2) * 0.45; setPos(m.pan, md.pos); } }
-    m.dist.gain.setTargetAtTime(g, now, md.silenced ? 0.015 : 0.3); }
   // distant life of the house
   farT -= dt;
   if (farT <= 0) {
@@ -903,7 +995,7 @@ function frame() {
   if (running) {
     T += dt;
     const px = P.x, pz = P.z;
-    if (!reading && !E.ended && C.t < 0) {
+    if (!reading && !pk.on && !E.ended && C.t < 0) {
       const fw = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
       const st = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
       if (fw || st) {
@@ -938,6 +1030,7 @@ function frame() {
     updateWorld(dt);
     updateListener();
     findTarget();
+    if (pk.on) { drawPeek(dt); elHint.textContent = 'E — отойти'; elHint.style.opacity = 0.6; }
     if (msgT > 0 && (msgT -= dt) <= 0) elMsg.style.opacity = 0;
   } else if (!started) {
     camera.position.set(P.x, EYE, P.z); camera.rotation.set(0, P.yaw, 0);
@@ -946,7 +1039,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fig };
+window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, peeker, pk, startPeek };
 </script>
 </body>
 </html>
