@@ -398,7 +398,37 @@ function updateFinale(dt) {
 }
 
 // ---------- build ----------
-const mWin = new THREE.MeshBasicMaterial({ color: 0x0c1524 });
+// Landing windows look across the yard at the house opposite: a dark facade, dark windows, and one dimly lit window
+// with a dark shape standing in it. That window is always level with the player (see updateYard).
+const yard = [];
+function yardWindow(n, x, y) {
+  const c = document.createElement('canvas'); c.width = 240; c.height = 200;
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = THREE.NearestFilter;
+  plane(1.2, 1.0, x, y, LAND_END - 0.01, Math.PI, new THREE.MeshBasicMaterial({ map: t }));
+  yard.push({ n, g: c.getContext('2d'), t, x, y, z: LAND_END });
+}
+function drawYard(w, rel, near) {   // rel: floors between the lit window and this one's own level, up is positive; near: the shape has come up to the glass
+  const g = w.g, W = 240, Hc = 200, ww = 24, wh = 27;
+  g.filter = 'none'; g.fillStyle = '#0b0d11'; g.fillRect(0, 0, W, Hc);
+  for (let i = 0; i < 400; i++) { g.fillStyle = `rgba(0,0,0,${Math.random() * 0.25})`; g.fillRect(Math.random() * W, Math.random() * Hc, 3, 2); }   // rough panel wall
+  for (let r = -2; r <= 2; r++) for (let c = 0; c < 5; c++) {
+    const x = (c + 0.5) * W / 5 - ww / 2, y = Hc / 2 - r * Hc / 4 - wh / 2, lit = r === rel && c === 1;   // the plane is mirrored, so column 1 shows right of centre
+    g.fillStyle = '#030406'; g.fillRect(x, y, ww, wh);
+    g.strokeStyle = '#14171c'; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, ww - 1, wh - 1);
+    if (lit) {
+      const gr = g.createLinearGradient(x, y, x + ww, y + wh); gr.addColorStop(0, '#4a3719'); gr.addColorStop(1, '#2c200e');
+      g.fillStyle = gr; g.fillRect(x + 1, y + 1, ww - 2, wh - 2);                               // a weak bulb somewhere inside
+      g.fillStyle = 'rgba(20,14,6,.75)'; g.fillRect(x + 1, y + 1, 5, wh - 2);                    // a curtain
+      const k = near ? 1.4 : 1, cx = x + ww * 0.42, by = y + wh - 1;
+      g.save(); g.beginPath(); g.rect(x + 1, y + 1, ww - 2, wh - 2); g.clip(); g.filter = 'blur(0.7px)'; g.fillStyle = '#050403';
+      g.beginPath(); g.ellipse(cx, by - 12.5 * k, 2.3 * k, 3.1 * k, 0, 0, 7); g.fill();          // head
+      g.beginPath(); g.moveTo(cx - 4.2 * k, by + 1); g.lineTo(cx - 3.6 * k, by - 8.5 * k); g.lineTo(cx + 3.6 * k, by - 8.5 * k); g.lineTo(cx + 4.2 * k, by + 1); g.fill();   // shoulders, down to the sill
+      g.restore(); g.filter = 'none';
+    }
+  }
+  g.fillStyle = 'rgba(14,22,38,.14)'; g.fillRect(0, 0, W, Hc);                                  // the glass itself
+  w.t.needsUpdate = true;
+}
 const mPanel = mat({ map: labelTex('ЩЭ', { bg: '#59605c', font: 'bold 40px Arial', color: '#b33' }) });
 for (let n = 0; n < FLOORS; n++) {
   const y0 = n * H, yc = y0 + H / 2;
@@ -479,7 +509,7 @@ for (let n = 0; n < FLOORS; n++) {
     box(SW, 0.2, LAND_END - RUN, SW / 2, y0 + 1.4, (RUN + LAND_END) / 2, [mConcrete, mConcrete, mFloorLand, mCeil, mConcrete, mConcrete]);
     // window, radiator, chute hatch, wall lamp, scribble
     const wy = y0 + 1.5 + 1.55, wx = SW / 2 + 0.1;
-    plane(1.2, 1.0, wx, wy, LAND_END - 0.01, Math.PI, mWin);
+    yardWindow(n, wx, wy);
     box(1.3, 0.05, 0.06, wx, wy + 0.5, LAND_END - 0.02, mCeil); box(1.4, 0.05, 0.16, wx, wy - 0.5, LAND_END - 0.07, mCeil);
     box(0.05, 1.0, 0.06, wx - 0.62, wy, LAND_END - 0.02, mCeil); box(0.05, 1.0, 0.06, wx + 0.62, wy, LAND_END - 0.02, mCeil); box(0.04, 1.0, 0.05, wx, wy, LAND_END - 0.02, mCeil);
     for (let k = 0; k < 9; k++) box(0.07, 0.55, 0.1, wx - 0.4 + k * 0.1, y0 + 1.5 + 0.45, LAND_END - 0.08, mCeil);
@@ -1049,6 +1079,19 @@ function updateTrail(dt, moving) {
   }
 }
 
+// The lit window across the yard keeps level with the player. A landing window n looks out at floor n + 1, so each one
+// shows the lit window in a different row; all of them are redrawn only while they are off screen. From the fourth
+// level the shape is a little bigger, as if it had stepped up to the glass. While it is looked at, nothing moves.
+function updateYard() {
+  const lf = Math.round((P.y + 1.5) / H), near = SHOW.has('window') || Math.floor((P.y + 0.05) / H) >= 4;
+  for (const w of yard) {
+    const rel = lf - (w.n + 1), key = (Math.abs(rel) <= 2 ? rel : 'none') + (near ? 'n' : 'f');
+    if (w.key === key) continue;
+    if (w.key !== undefined && !unseen(w.x, w.y, w.z)) continue;
+    drawYard(w, rel, near); w.key = key;
+  }
+}
+
 // ---------- world randomness ----------
 let blackoutT = rand(25, 50), farT = rand(40, 90);
 function onFloorOf(test) { const n = Math.round(P.y / H); return Math.abs(P.y - n * H) < 0.75 && test(n); }   // on a floor of that kind, not on the stairs between
@@ -1156,7 +1199,7 @@ function frame() {
     torch.intensity = blinkT > 0 || torchOff > 0 || D.t >= 0 ? 0 : torchBase * tf;
     torch.target.position.set(Math.sin(T * 0.9) * 0.025, -0.06 + Math.sin(P.bob * 4.6) * 0.015, -1);
     post.uniforms.time.value = T; post.uniforms.fear.value = F.c;
-    updateDark(dt); updateTrail(dt, moving);
+    updateDark(dt); updateTrail(dt, moving); updateYard();
     updateFollower(dt, E.t >= 0 ? false : moving);
     updateBack(dt); updateFinale(dt); post.uniforms.fade.value = E.fade * updateCatch(dt);
     updateWorld(dt);
@@ -1165,13 +1208,14 @@ function frame() {
     if (pk.on) { (pk.mode === 'hole' ? drawHole : drawPeek)(dt); elHint.textContent = 'E — отойти'; elHint.style.opacity = 0.6; }
     if (msgT > 0 && (msgT -= dt) <= 0) elMsg.style.opacity = 0;
   } else if (!started) {
+    updateYard();
     camera.position.set(P.x, EYE, P.z); camera.rotation.set(0, P.yaw, 0);
   }
   renderer.setRenderTarget(rt); renderer.render(scene, camera);
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail };
+window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail, yard };
 </script>
 </body>
 </html>
