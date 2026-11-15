@@ -293,12 +293,12 @@ function buildSwitchPuzzle(n) {
 function setSilent(v) {
   S.silent = v; const now = A.ctx.currentTime;
   S.rocker.rotation.x = v ? -0.35 : 0.35;
-  if (v) { tick(900, 0.08); A.master.gain.setTargetAtTime(0, now + 0.06, 0.015); }
-  else { A.master.gain.setTargetAtTime(0.9, now, 0.4); tick(900, 0.08, 0.05); }
+  if (v) { sfxSwitch(); A.master.gain.setTargetAtTime(0, now + 0.2, 0.015); }
+  else { A.master.gain.setTargetAtTime(0.9, now, 0.4); sfxSwitch(0.05); }
   S.gate.target = v ? -1.35 : 0;
 }
 function pressSwitch() {
-  if (S.solved) { tick(900, 0.08); say('Щёлкает вхолостую.'); return; }
+  if (S.solved) { sfxSwitch(); say('Щёлкает вхолостую.'); return; }
   setSilent(!S.silent);
 }
 function updatePuzzles(dt) {
@@ -359,7 +359,7 @@ const E = { t: -1, ended: false, fade: 1 };
 function startFinale() {
   if (E.t >= 0 || E.ended) return;
   E.t = 0; E.c0 = F.c; F.active = true;
-  for (let i = 0; i < 7; i++) tick(rand(2400, 4200), 0.03, i * 0.07 + rand(0, 0.03));
+  if (!playBuf('keys', null, 0.6, 8000)) for (let i = 0; i < 7; i++) tick(rand(2400, 4200), 0.03, i * 0.07 + rand(0, 0.03));
   say('Ключ. Руки не слушаются.');
 }
 function updateFinale(dt) {
@@ -368,9 +368,9 @@ function updateFinale(dt) {
   if (Math.hypot(P.x - 1.0, P.z + HALL_D) > 1.6) { E.t = -1; say('Ключ остался в замке. Вернись к двери.'); return; }
   const was = E.t; E.t += dt; F.c = Math.max(F.c, lerp(E.c0, 1, Math.min(1, E.t / 9.2)));
   const at = x => was < x && E.t >= x;
-  if (at(2.2)) for (let i = 0; i < 4; i++) tick(rand(1800, 2600), 0.03, i * 0.11);
-  if (at(4.5)) { sfxClunk(); say('Один оборот.'); }
-  if (at(7.6)) { sfxClunk(); say('Второй.'); }
+  if (at(2.2) && !playBuf('keys', null, 0.45, 8000, { rate: 1.12 })) for (let i = 0; i < 4; i++) tick(rand(1800, 2600), 0.03, i * 0.11);
+  if (at(4.5)) { playBuf('unlock', null, 0.8, 8000) || sfxClunk(); say('Один оборот.'); }
+  if (at(7.6)) { playBuf('unlock', null, 0.8, 8000, { rate: 0.93 }) || sfxClunk(); say('Второй.'); }
   if (E.t >= 10) {
     E.ended = true; elMsg.style.opacity = 0; elHint.style.opacity = 0;
     thud({ gain: 0.9, cutoff: 700, f0: 90, f1: 35, len: 0.35, send: 0.8, delay: 0.5 });
@@ -482,8 +482,11 @@ box(HALL_W + SW + 0.2, 0.2, HALL_D + LAND_END + 0.2, (SW - HALL_W) / 2, FLOORS *
 { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, FLOORS * H, 14), mat({ color: 0x35423c })); c.position.set(0.28, FLOORS * H / 2, LAND_END - 0.28); world.add(c); }
 // what is heard behind each door: seven recordings for eleven flats, the rest are silent
 const DOOR_SND = { baby: { vol: 0.5, lp: 600 }, clock: { vol: 0.55, lp: 1500 }, cough: { vol: 0.6, lp: 700, gap: [8, 20] }, musicbox: { vol: 0.35, lp: 900 },
-  snore: { vol: 0.7, lp: 500 }, talk: { vol: 0.5, lp: 550, shy: true }, whisper: { vol: 0.8, lp: 1800, gap: [3, 8], shy: true } };
-{ const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
+  snore: { vol: 0.7, lp: 500 }, talk: { vol: 0.5, lp: 550, shy: true }, whisper: { vol: 0.7, lp: 1800, gap: [2, 6], shy: true },
+  phone: { vol: 0.5, lp: 1100, gap: [1.5, 3] }, hum: { vol: 0.6, lp: 900, shy: true }, piano: { vol: 0.5, lp: 800 }, cry: { vol: 0.5, lp: 700, shy: true },
+  scratch: { vol: 0.7, lp: 2500, gap: [5, 14] }, drip: { vol: 0.6, lp: 1600 }, radio: { vol: 0.45, lp: 900 }, laugh: { vol: 0.5, lp: 900, gap: [14, 40] } };
+// each run eight of the fifteen are behind eight of the eleven flats; the other three flats are silent
+{ const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, 8).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
 world.traverse(m => { if (m.isMesh && m.material.isMeshLambertMaterial !== false && !m.material.isMeshBasicMaterial) { m.castShadow = !m.material.transparent; m.receiveShadow = true; } });
 
 // the peeker: part of a head around a corner, at the edge of the screen. Pulls back as your eyes come near.
@@ -755,19 +758,22 @@ function tick(freq, gain, delay = 0, pos) {   // short metallic / electric tick
   o.start(t); o.stop(t + 0.1);
 }
 function creak(pos) {   // a floorboard behind a door
+  if (playBuf('creak', pos, 0.5, 2200)) return;
   const ctx = A.ctx, t = ctx.currentTime, o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
   o.type = 'sawtooth'; o.frequency.setValueAtTime(190, t); o.frequency.linearRampToValueAtTime(120, t + 0.4);
   f.type = 'bandpass'; f.frequency.value = 650; f.Q.value = 3;
   g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.09, t + 0.05); g.gain.linearRampToValueAtTime(0, t + 0.42);
   o.connect(f).connect(g).connect(p).connect(A.master); o.start(t); o.stop(t + 0.45);
 }
-function playBuf(name, pos, gain, lp) {
+function playBuf(name, pos, gain, lp, o = {}) {   // a recorded sound; false if it is not loaded, so callers can fall back to synthesis
   if (!A.buf || !A.buf[name]) return false;
-  const ctx = A.ctx, s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
-  s.buffer = A.buf[name]; f.type = 'lowpass'; f.frequency.value = lp; g.gain.value = gain;
-  s.connect(f).connect(g).connect(p).connect(A.master); const sd = ctx.createGain(); sd.gain.value = 0.3; p.connect(sd).connect(A.conv); s.start();
+  const ctx = A.ctx, t = ctx.currentTime + (o.delay || 0), s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  s.buffer = A.buf[name]; s.playbackRate.value = o.rate || 1; f.type = 'lowpass'; f.frequency.value = lp; g.gain.value = gain;
+  s.connect(f).connect(g); const tail = pos ? g.connect(panner(pos)) : g;
+  tail.connect(A.master); const sd = ctx.createGain(); sd.gain.value = o.send ?? 0.3; tail.connect(sd).connect(A.conv); s.start(t);
   return true;
 }
+function sfxSwitch(delay = 0) { if (!playBuf('switch', null, 0.8, 8000, { delay })) tick(900, 0.08, delay); }
 function startDoorSounds() {
   const ctx = A.ctx;
   for (const d of doors) {
@@ -798,6 +804,7 @@ function rattle(pos) {
   thud({ gain: 0.5, cutoff: 480, f0: 120, f1: 60, len: 0.1, send: 0.5, pos, delay: 1.5 });
 }
 function liftSound(pos) {
+  if (playBuf('lift', pos, 0.9, 1200, { send: 0.5 })) return;
   const ctx = A.ctx, t = ctx.currentTime, o = ctx.createOscillator(), n = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
   o.type = 'sawtooth'; o.frequency.setValueAtTime(40, t); o.frequency.linearRampToValueAtTime(52, t + 3); o.frequency.linearRampToValueAtTime(38, t + 6.5);
   n.buffer = A.noise; n.loop = true; f.type = 'lowpass'; f.frequency.value = 190;
@@ -807,6 +814,7 @@ function liftSound(pos) {
   thud({ gain: 0.5, cutoff: 500, f0: 90, f1: 40, len: 0.2, send: 0.7, pos, delay: 7 });
 }
 function gateCreak(pos) {   // long hinge creak
+  if (playBuf('gateopen', pos, 0.7, 4000, { send: 0.6 })) return;
   const ctx = A.ctx, t = ctx.currentTime, o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
   o.type = 'sawtooth'; o.frequency.setValueAtTime(240, t); o.frequency.linearRampToValueAtTime(330, t + 0.8); o.frequency.linearRampToValueAtTime(210, t + 1.9);
   f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 5;
@@ -815,9 +823,10 @@ function gateCreak(pos) {   // long hinge creak
   o.start(t); o.stop(t + 2.05);
 }
 function gateRattle(pos) { for (let i = 0; i < 3; i++) thud({ gain: 0.4, cutoff: 2600, f0: rand(260, 340), f1: 150, thump: 0.5, noise: 0.7, len: 0.09, send: 0.7, pos, delay: i * 0.13 }); }
-function clang(pos) { thud({ gain: 0.8, cutoff: 2800, f0: 320, f1: 110, thump: 0.7, noise: 0.8, len: 0.3, send: 1, pos }); tick(740, 0.05, 0.02); tick(1130, 0.03, 0.04); }
+function clang(pos) { if (playBuf('gateclose', pos, 0.9, 5000, { send: 0.6 })) return; thud({ gain: 0.8, cutoff: 2800, f0: 320, f1: 110, thump: 0.7, noise: 0.8, len: 0.3, send: 1, pos }); tick(740, 0.05, 0.02); tick(1130, 0.03, 0.04); }
 function sfxClunk() { thud({ gain: 0.5, cutoff: 900, f0: 160, f1: 70, send: 0.5 }); tick(420, 0.05, 0.03); }
 function selfStep(onStairs) {
+  if (playBuf('pstep' + (1 + Math.floor(Math.random() * 3)), null, 0.3, onStairs ? 3500 : 6000, { rate: rand(0.94, 1.08), send: 0.25 })) return;
   thud({ gain: 0.2 + Math.random() * 0.05, cutoff: onStairs ? 1500 : 2100, f0: rand(120, 150), f1: 60, thump: 0.45, noise: 0.5, len: 0.07, send: 0.3 });
 }
 function updateListener() {
@@ -842,10 +851,15 @@ function followerStep(c, extra, above) {
   const up = above && P.y < (FLOORS - 2) * H;   // sometimes the steps come from above
   const pos = extra ? F.pos.set(P.x + Math.sin(P.yaw) * 1.6, P.y - 0.3, P.z + Math.cos(P.yaw) * 1.6) : followerPos(lerp(4.6, 0.8, c) * (up ? -1 : 1));
   const g = lerp(0.07, 1.0, Math.pow(c, 1.5));
+  // recorded step on concrete, slowed down so it is heavier than yours, plus a low thump for weight
+  if (playBuf('fstep' + (1 + Math.floor(Math.random() * 4)), pos, g * 1.5, lerp(350, 6000, c), { rate: rand(0.72, 0.82), send: lerp(0.9, 0.3, c) })) {
+    thud({ gain: g * 0.5, cutoff: 160, f0: 70, f1: 36, thump: 1, noise: 0.1, len: 0.1, send: 0.3, pos }); return;
+  }
   thud({ gain: g, cutoff: lerp(240, 2400, c), f0: 95, f1: 38, thump: 1, noise: 0.45, len: 0.16, send: lerp(0.9, 0.3, c), pos });
   thud({ gain: g * 0.4, cutoff: lerp(300, 3000, c), f0: 130, f1: 60, thump: 0.3, noise: 0.6, len: 0.06, send: 0.5, pos, delay: 0.07 }); // heel, then sole
 }
 function breath() {   // it is right behind you now, and it stopped
+  if (playBuf('exhale', new THREE.Vector3(P.x + Math.sin(P.yaw) * 0.6, P.y + 1.5, P.z + Math.cos(P.yaw) * 0.6), 0.6, 3000, { rate: 0.7 })) return;
   const ctx = A.ctx, t = ctx.currentTime, n = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
   n.buffer = A.noise; f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 0.8;
   g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.09, t + 0.9); g.gain.linearRampToValueAtTime(0, t + 2.2);
