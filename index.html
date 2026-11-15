@@ -489,53 +489,35 @@ const DOOR_SND_COUNT = 3;
 { const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, DOOR_SND_COUNT).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
 world.traverse(m => { if (m.isMesh && m.material.isMeshLambertMaterial !== false && !m.material.isMeshBasicMaterial) { m.castShadow = !m.material.transparent; m.receiveShadow = true; } });
 
-// things at the edge of sight. There is no body to look at: two faint points in the dark that are not there
-// when you turn, and fingers on a rail that let go. The rest the player imagines.
-const eyes = new THREE.Group(); eyes.visible = false; world.add(eyes);
-const mEyes = new THREE.MeshBasicMaterial({ color: 0x4a4a40, transparent: true, opacity: 0 });
-for (const sx of [-0.034, 0.034]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.011, 6, 5), mEyes); e.position.x = sx; eyes.add(e); }
+// The edge of sight: fingers on a rail that let go as you turn to them. Once per run at most, and not before the second floor.
 const fingers = new THREE.Group(); fingers.visible = false; world.add(fingers);
 { const fm = mat({ color: 0x9a9080 }); for (let k = 0; k < 4; k++) box(0.017, 0.07 + (k === 1 || k === 2 ? 0.01 : 0), 0.022, (k - 1.5) * 0.024, -0.02, 0, fm, fingers); }
-const G = { cd: 30, kind: null, k: 0, out: false, life: 0, blink: 2, show: new THREE.Vector3(), hide: new THREE.Vector3() };
-function edgeSpots() {   // [kind, x, y, z, hide dx, dy, dz]
+const G = { cd: 30, on: false, used: false, k: 0, out: false, life: 0, show: new THREE.Vector3(), hide: new THREE.Vector3() };
+function edgeSpots() {   // [x, y, z, hide dx, dy, dz]
   const n = Math.round(P.y / H), onFloor = Math.abs(P.y - n * H) < 0.05, y0 = n * H, fl = Math.floor(P.y / H), list = [];
-  if (onFloor && P.z < -0.3 && n >= 1) list.push(['eyes', BXC - 0.15, y0 + 0.05, 0.9]);                                     // low on the stairs going down
-  if (onFloor && P.z < -0.3 && n <= FLOORS - 2) {
-    list.push(['eyes', MIDX, y0 + 2.5, RUN + 0.3]);                                                                         // behind the rail one landing up
-    list.push(['fingers', MIDX + rand(-0.2, 0.2), y0 + 2.445, RUN - 0.002, 0, 0.06, 0.09]);                                 // fingers over that rail
-  }
-  if (P.x > MIDX && P.z > 0.2 && P.z < 1.7 && fl <= FLOORS - 2) list.push(['eyes', 0.52, fl * H + 3.0, LAND_END - 0.3]);    // beside the chute ahead
-  if (P.x < MIDX && P.z > 0.6 && P.z < 2.2 && fl <= FLOORS - 2) list.push(['fingers', MIDX + rand(-0.2, 0.2), (fl + 1) * H + 0.945, 0.002, 0, 0.06, -0.09]);   // on the rail of the hall you are climbing to
-  for (const d of doors) if (d.floor === n && onFloor && d.leaf.rotation.y > 0.25) {                                        // in the gap of a door ajar
-    const c = Math.cos(d.ry), sn = Math.sin(d.ry); list.push(['eyes', d.pos.x + 0.33 * c + 0.03 * sn, d.pos.y + 0.05, d.pos.z - 0.33 * sn + 0.03 * c]);
-  }
+  if (onFloor && P.z < -0.3 && n <= FLOORS - 2) list.push([MIDX + rand(-0.2, 0.2), y0 + 2.445, RUN - 0.002, 0, 0.06, 0.09]);                         // over the rail one landing up
+  if (P.x < MIDX && P.z > 0.6 && P.z < 2.2 && fl <= FLOORS - 2) list.push([MIDX + rand(-0.2, 0.2), (fl + 1) * H + 0.945, 0.002, 0, 0.06, -0.09]);   // on the rail of the hall you are climbing to
   return list;
 }
 function updatePeeker(dt) {
-  G.cd -= dt; camera.getWorldDirection(vDir);
-  if (!G.kind) {
-    if (G.cd > 0 || !F.active || T < 40 || E.t >= 0 || C.t >= 0 || pk.on || reading) return;
+  camera.getWorldDirection(vDir);
+  if (!G.on) {
+    G.cd -= dt;
+    if (G.used || G.cd > 0 || !F.active || P.y < 2 * H - 0.05 || E.t >= 0 || C.t >= 0 || pk.on || reading) return;
     for (const sp of edgeSpots()) {
-      const dot = vTo.set(sp[1], sp[2], sp[3]).sub(camera.position).normalize().dot(vDir);
+      const dot = vTo.set(sp[0], sp[1], sp[2]).sub(camera.position).normalize().dot(vDir);
       if (dot < 0.55 || dot > 0.9 || Math.random() < 0.5) continue;       // on screen, but off to the side
-      G.kind = sp[0]; G.show.set(sp[1], sp[2], sp[3]); G.hide.set(sp[1] + (sp[4] || 0), sp[2] + (sp[5] || 0), sp[3] + (sp[6] || 0));
-      G.k = 0; G.out = true; G.life = 0; G.blink = rand(1.5, 3); (G.kind === 'eyes' ? eyes : fingers).visible = true; break;
+      G.show.set(sp[0], sp[1], sp[2]); G.hide.set(sp[0] + sp[3], sp[1] + sp[4], sp[2] + sp[5]);
+      G.on = G.used = true; G.k = 0; G.out = true; G.life = 0; fingers.visible = true; break;
     }
-    if (!G.kind) return;
+    if (!G.on) return;
   }
   G.life += dt;
   vTo.copy(G.show).sub(camera.position); const dist = vTo.length(), dot = vTo.normalize().dot(vDir);
   if (G.out && (dot > 0.95 || dist < 2.2 || G.life > 7)) G.out = false;
-  if (G.kind === 'eyes') {
-    G.k = clamp(G.k + (G.out ? dt / 1.5 : -dt / 0.08), 0, 1);
-    G.blink -= dt; if (G.blink < -0.13) G.blink = rand(1.5, 4);
-    mEyes.opacity = G.blink < 0 ? 0 : 0.8 * G.k;
-    eyes.position.copy(G.show); eyes.rotation.y = Math.atan2(P.x - G.show.x, P.z - G.show.z);
-  } else {
-    G.k = clamp(G.k + (G.out ? dt / 1.2 : -dt / 0.25), 0, 1);
-    fingers.position.lerpVectors(G.hide, G.show, G.k * G.k * (3 - 2 * G.k));
-  }
-  if (!G.out && G.k === 0) { eyes.visible = fingers.visible = false; G.kind = null; G.cd = rand(25, 50); }
+  G.k = clamp(G.k + (G.out ? dt / 1.2 : -dt / 0.25), 0, 1);
+  fingers.position.lerpVectors(G.hide, G.show, G.k * G.k * (3 - 2 * G.k));
+  if (!G.out && G.k === 0) { fingers.visible = false; G.on = false; }
 }
 
 // looking through the gap of a door that stands ajar
@@ -1101,7 +1083,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, eyes, fingers, mEyes, pk, startPeek };
+window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek };
 </script>
 </body>
 </html>
