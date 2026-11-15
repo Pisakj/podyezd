@@ -20,6 +20,24 @@ Needs internet once for three.js (jsDelivr CDN, r160). No build step, no assets.
 
 GitHub Pages from `main`, root. Repo: https://github.com/Pisakj/podyezd, live at https://pisakj.github.io/podyezd/. A push to `main` republishes in about a minute.
 
+## Tuning
+
+URL parameters, all optional:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `fog` | 0.2 | Fog density. Higher: things vanish sooner |
+| `torch` | 6 | Torch brightness |
+| `rate` | 35 | Seconds of standing still for the follower to come all the way |
+| `speed` | 1.6 | Walking speed in m/s. Stairs are slower in proportion (x0.81) |
+| `order` | random | Puzzle on floors 1-3, e.g. `switch,back,loop` |
+
+Other values worth knowing, constants in `index.html`: `NEAR` (0.88, closeness at which everything goes silent), `HINT_AFTER` (90 s stuck on a floor before the door gap shows the answer), `DOOR_SND_COUNT` (3 flats with sound), `minC` in `updateFollower` (0.12 per floor), silence before the catch (6-10 s), torch dropouts (0.3-1.5 s every 40-90 s), distant sounds (`farT`, every 40-90 s).
+
+## Design rules
+
+Fear comes from silence, waiting and unpredictability, not from more events. Less happens, each event weighs more. No jump scares, the follower is never shown, the player cannot lose. The follower catches the player at most once per run.
+
 ## Testing
 
 `?order=switch,back,loop` fixes which puzzle is on floors 1-3 (random otherwise).
@@ -27,4 +45,4 @@ A full run can be scripted through `window.__g` (player state, puzzle state) wit
 
 ## Status
 
-Whole game is in: follower, three puzzles in random order, changing rules sheets, finale. Now: fixing issues from playtests.
+Whole game is in and tuned for quiet dread (2026-11-15). Now: playtests and manual tuning of the values above.
