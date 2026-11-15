@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Подъезд</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Georgia, 'Times New Roman', serif; color: #cfc9b8; }
+  canvas { display: block; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,.78) 100%); }
+  #dot { position: fixed; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px; border-radius: 50%; background: rgba(255,255,255,.35); pointer-events: none; }
+  #hint { position: fixed; left: 0; right: 0; top: 56%; text-align: center; font-size: 15px; letter-spacing: .06em; color: rgba(220,215,200,.75); pointer-events: none; opacity: 0; transition: opacity .2s; }
+  #msg { position: fixed; left: 0; right: 0; bottom: 12%; text-align: center; font-size: 19px; padding: 0 24px; text-shadow: 0 0 8px #000; pointer-events: none; opacity: 0; transition: opacity .6s; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,.86); cursor: pointer; text-align: center; }
+  #overlay h1 { font-weight: normal; font-size: 54px; letter-spacing: .5em; margin: 0 0 28px .5em; color: #b9b3a2; }
+  #overlay p { margin: 6px 0; font-size: 15px; color: #7d796d; letter-spacing: .05em; }
+  #overlay .go { margin-top: 30px; color: #a9a392; }
+  #paper { position: fixed; left: 50%; top: 50%; width: min(440px, 86vw); transform: translate(-50%, -50%) rotate(-1.2deg); background: #d9d2b8; color: #26231c; padding: 30px 34px 26px; box-shadow: 0 0 60px #000; font-family: 'Courier New', monospace; font-size: 15px; line-height: 1.55; display: none; }
+  #paper h2 { margin: 0 0 14px; font-size: 18px; text-align: center; letter-spacing: .12em; }
+  #paper ol { margin: 0; padding-left: 24px; }
+  #paper .sign { margin-top: 16px; text-align: right; font-style: italic; }
+  #paper .close { margin-top: 14px; text-align: center; font-size: 12px; color: #6d675a; }
+</style>
+</head>
+<body>
+<div id="vignette"></div>
+<div id="dot"></div>
+<div id="hint"></div>
+<div id="msg"></div>
+<div id="paper"></div>
+<div id="overlay">
+  <h1>ПОДЪЕЗД</h1>
+  <p>WASD — идти · мышь — смотреть · E — действие</p>
+  <p>Лучше в наушниках.</p>
+  <p class="go" id="go">Нажми, чтобы войти</p>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- constants ----------
+const H = 3;            // floor height
+const FLOORS = 5;       // 0 = lobby, 1..3 = puzzle floors, 4 = home
+const RUN = 2.52;       // horizontal length of a flight
+const STEPS = 9, RISE = 1.5 / STEPS, TREAD = RUN / STEPS;
+const SW = 2.6;         // stair shaft width (x: 0..SW)
+const LAND_END = RUN + 1.3;
+const HALL_W = 3.2, HALL_D = 2.6;   // hall: x -HALL_W..SW, z -HALL_D..0
+const R = 0.28;         // player radius
+const EYE = 1.62;
+const rand = (a, b) => a + Math.random() * (b - a);
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- renderer ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(innerWidth, innerHeight);
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const FOG = 0x06090a;
+scene.background = new THREE.Color(FOG);
+scene.fog = new THREE.FogExp2(FOG, 0.15);
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 40);
+camera.rotation.order = 'YXZ';
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+});
+scene.add(new THREE.AmbientLight(0x8fa3b0, 0.09));
+
+// ---------- textures ----------
+function tex(w, h, draw, rep) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  if (rep) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep[0], rep[1]); }
+  return t;
+}
+function grime(g, w, h, n = 70, a = 0.09) {
+  for (let i = 0; i < n; i++) {
+    const r = rand(w * 0.03, w * 0.22), x = rand(0, w), y = rand(0, h);
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, `rgba(0,0,0,${Math.random() * a})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  for (let i = 0; i < n * 30; i++) {
+    g.fillStyle = `rgba(${Math.random() < 0.5 ? 0 : 255},${Math.random() < 0.5 ? 0 : 255},0,${Math.random() * 0.04})`;
+    g.fillRect(rand(0, w), rand(0, h), 2, 2);
+  }
+}
+const GREEN = '#3c6654', WHITE = '#b5b1a0';
+// wall where paint covers [s, s+1.5] (mod 3) at each column; sFn(u 0..1) -> s in metres
+function wallTex(sFn) {
+  return tex(512, 512, (g, w, h) => {
+    g.fillStyle = WHITE; g.fillRect(0, 0, w, h);
+    for (let px = 0; px < w; px++) {
+      const s = ((sFn(px / w) % 3) + 3) % 3;
+      const seg = (a, b) => { // metres -> canvas
+        g.fillStyle = GREEN; g.fillRect(px, h * (1 - b / 3), 1, h * (b - a) / 3);
+        g.fillStyle = '#27443a'; g.fillRect(px, h * (1 - b / 3), 1, 3);
+      };
+      if (s + 1.5 <= 3) seg(s, s + 1.5); else { seg(s, 3); seg(0, s - 1.5); }
+    }
+    grime(g, w, h);
+    g.strokeStyle = 'rgba(20,20,20,.25)'; g.lineWidth = 1;
+    for (let i = 0; i < 14; i++) { g.beginPath(); const x = rand(0, w), y = rand(0, h); g.moveTo(x, y); g.lineTo(x + rand(-40, 40), y + rand(-40, 40)); g.stroke(); }
+  });
+}
+const mat = (o) => new THREE.MeshLambertMaterial(o);
+const mWallBand = mat({ map: wallTex(() => 0) });
+const mWallBack = mat({ map: wallTex(() => 1.5) });
+const mWallA = mat({ map: wallTex(u => { const z = u * LAND_END; return z < RUN ? 1.5 * z / RUN : 1.5; }), side: THREE.DoubleSide });
+const mWallB = mat({ map: wallTex(u => { const z = u * LAND_END; return z < RUN ? 3 - 1.5 * z / RUN : 1.5; }), side: THREE.DoubleSide });
+const tileDraw = (g, w, h) => {
+  const n = 8, s = w / n;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    g.fillStyle = (i + j) % 2 ? '#6b5a4a' : '#8a7c68'; g.fillRect(i * s, j * s, s, s);
+    g.strokeStyle = 'rgba(0,0,0,.35)'; g.strokeRect(i * s + .5, j * s + .5, s - 1, s - 1);
+  }
+  grime(g, w, h, 40, 0.14);
+};
+const mFloorHall = mat({ map: tex(256, 256, tileDraw, [5, 2.2]) });
+const mFloorLand = mat({ map: tex(256, 256, tileDraw, [2.2, 1.1]) });
+const mConcrete = mat({ map: tex(256, 256, (g, w, h) => { g.fillStyle = '#7c7a72'; g.fillRect(0, 0, w, h); grime(g, w, h, 90, 0.12); }) });
+const mCeil = mat({ map: tex(256, 256, (g, w, h) => { g.fillStyle = '#a29e8f'; g.fillRect(0, 0, w, h); grime(g, w, h, 50, 0.1); }) });
+const mRail = mat({ color: 0x2a1c14 });
+const mMetal = mat({ color: 0x3a3f3d });
+const mDark = mat({ color: 0x15171a });
+function doorTex(base) {
+  return tex(128, 256, (g, w, h) => {
+    g.fillStyle = base; g.fillRect(0, 0, w, h);
+    g.strokeStyle = 'rgba(0,0,0,.4)'; g.lineWidth = 1.5;
+    for (let i = -8; i < 12; i++) {
+      g.beginPath(); g.moveTo(i * 32, 0); g.lineTo(i * 32 + h / 2, h); g.stroke();
+      g.beginPath(); g.moveTo(i * 32, 0); g.lineTo(i * 32 - h / 2, h); g.stroke();
+    }
+    g.fillStyle = 'rgba(190,170,110,.6)';
+    for (let y = 0; y <= h; y += 32) for (let x = (y / 32) % 2 ? 16 : 0; x <= w; x += 32) { g.beginPath(); g.arc(x, y, 1.6, 0, 7); g.fill(); }
+    grime(g, w, h, 20, 0.15);
+  });
+}
+const doorMats = ['#3b2318', '#2a2420', '#412b22', '#1f2a26', '#33211c'].map(c => mat({ map: doorTex(c) }));
+function labelTex(text, o = {}) {
+  const w = o.w || 256, h = o.h || 128;
+  return tex(w, h, (g) => {
+    if (o.bg) { g.fillStyle = o.bg; g.fillRect(0, 0, w, h); }
+    g.fillStyle = o.color || '#111'; g.font = o.font || 'bold 90px Arial';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    const lines = text.split('\n');
+    lines.forEach((l, i) => g.fillText(l, w / 2, h / 2 + (i - (lines.length - 1) / 2) * (o.lh || 40)));
+    if (o.bg) grime(g, w, h, 8, 0.08);
+  });
+}
+
+// ---------- geometry helpers ----------
+const world = new THREE.Group(); scene.add(world);
+function box(w, h, d, x, y, z, m, parent = world) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); parent.add(b); return b;
+}
+function plane(w, h, x, y, z, ry, m, parent = world) {
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m); p.position.set(x, y, z); p.rotation.y = ry; parent.add(p); return p;
+}
+const TH = Math.atan2(1.5, RUN), FLEN = Math.hypot(1.5, RUN);
+
+const lamps = [];
+function addLamp(x, y, z, base, kind) {
+  const light = new THREE.PointLight(0xffc98a, base, 8.5, 2); light.position.set(x, y, z); world.add(light);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe2b0, fog: false }));
+  bulb.position.set(x, y, z); world.add(bulb);
+  box(0.012, 0.25, 0.012, x, y + 0.17, z, mDark);
+  const l = { light, bulb, base, kind, on: true, t: rand(0.5, 3), off: 0, f: 1 };
+  lamps.push(l); return l;
+}
+
+const interact = [];   // {pos, label, act}
+const peepholes = [];
+
+function buildDoor(x, y, z, ry, m, number) {
+  const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; world.add(g);
+  box(1.02, 2.14, 0.05, 0, 1.07, 0.0, mDark, g);
+  box(0.9, 2.05, 0.07, 0, 1.025, 0.02, m, g);
+  const peep = new THREE.Mesh(new THREE.CircleGeometry(0.018, 12), new THREE.MeshBasicMaterial({ color: 0x1a1d22 }));
+  peep.position.set(0, 1.5, 0.057); g.add(peep); peepholes.push(peep);
+  box(0.03, 0.12, 0.05, 0.36, 1.0, 0.06, mMetal, g);
+  if (number != null) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.09), mat({ map: labelTex(String(number), { bg: '#b9a878', font: 'bold 84px Arial' }) }));
+    p.position.set(0, 1.75, 0.057); g.add(p);
+  }
+  return g;
+}
+
+// ---------- build ----------
+const mWin = new THREE.MeshBasicMaterial({ color: 0x0c1524 });
+for (let n = 0; n < FLOORS; n++) {
+  const y0 = n * H, yc = y0 + H / 2;
+  // hall slab: tile on top, ceiling below
+  box(HALL_W + SW, 0.2, HALL_D, (SW - HALL_W) / 2, y0 - 0.1, -HALL_D / 2, [mConcrete, mConcrete, mFloorHall, mCeil, mConcrete, mConcrete]);
+  // hall walls
+  box(HALL_W + SW + 0.2, H, 0.1, (SW - HALL_W) / 2, yc, -HALL_D - 0.05, mWallBand);
+  box(0.1, H, HALL_D, -HALL_W - 0.05, yc, -HALL_D / 2, mWallBand);
+  box(0.1, H, HALL_D, SW + 0.05, yc, -HALL_D / 2, mWallBand);
+  box(HALL_W, H, 0.1, -HALL_W / 2, yc, 0.05, mWallBand);
+  // shaft walls
+  plane(LAND_END, H, SW, yc, LAND_END / 2, -Math.PI / 2, mWallA);
+  plane(LAND_END, H, 0, yc, LAND_END / 2, -Math.PI / 2, mWallB);
+  plane(SW, H, SW / 2, yc, LAND_END, Math.PI, mWallBack);
+
+  // lift
+  box(0.08, 2.2, 1.3, -HALL_W + 0.03, y0 + 1.1, -1.3, mDark);
+  box(0.04, 2.05, 0.53, -HALL_W + 0.08, y0 + 1.025, -1.57, mMetal);
+  box(0.04, 2.05, 0.53, -HALL_W + 0.08, y0 + 1.025, -1.03, mMetal);
+  box(0.04, 0.16, 0.1, -HALL_W + 0.03, y0 + 1.1, -0.5, mMetal);
+  interact.push({ pos: new THREE.Vector3(-HALL_W + 0.05, y0 + 1.1, -0.5), label: 'вызвать лифт', act: () => { sfxClunk(); say('Кнопка проваливается и не возвращается.'); } });
+
+  // lamp in hall
+  const kind = n === 2 ? 'flicker' : 'normal';
+  addLamp(-0.6, y0 + 2.5, -1.3, n === 0 ? 7 : rand(4.5, 6.5), kind);
+
+  if (n === 0) {
+    // entrance door, mailboxes, rules, lift sign, way down is walled off
+    const d = buildDoor(-1.9, 0, -HALL_D + 0.01, 0, mMetal, null); d.scale.set(1.25, 1.02, 1);
+    interact.push({ pos: new THREE.Vector3(-1.9, 1.2, -HALL_D), label: 'открыть', act: () => { sfxClunk(); say('Заперто. Домофон молчит.'); } });
+    const mb = tex(256, 128, (g, w, h) => {
+      g.fillStyle = '#3d4d5c'; g.fillRect(0, 0, w, h);
+      for (let i = 0; i < 6; i++) for (let j = 0; j < 2; j++) {
+        g.strokeStyle = '#1c242c'; g.lineWidth = 3; g.strokeRect(i * 42 + 3, j * 62 + 3, 40, 58);
+        g.fillStyle = '#10151a'; g.fillRect(i * 42 + 10, j * 62 + 14, 26, 4);
+        g.fillStyle = '#aab'; g.font = '14px Arial'; g.fillText(String(5 + j * 6 + i), i * 42 + 15, j * 62 + 44);
+      }
+      grime(g, w, h, 20, 0.15);
+    });
+    box(1.3, 0.62, 0.12, -2.25, 1.45, -0.06, [mMetal, mMetal, mMetal, mMetal, mMetal, mat({ map: mb })]);
+    plane(0.4, 0.56, -0.8, 1.5, -0.006, Math.PI, mat({ map: paperTexture() }));
+    interact.push({ pos: new THREE.Vector3(-0.8, 1.5, 0), label: 'прочитать', act: () => togglePaper(true) });
+    plane(0.5, 0.2, -HALL_W + 0.125, 1.75, -1.3, Math.PI / 2, mat({ map: labelTex('ЛИФТ\nНЕ РАБОТАЕТ', { bg: '#cfc8ae', font: 'bold 34px Arial', lh: 44 }) }));
+    box(1.3, H - 0.2, 0.1, 0.65, 1.4, 0.05, mWallBand);
+    box(SW, 0.2, LAND_END, SW / 2, -0.1, LAND_END / 2, mConcrete);
+  } else {
+    // apartment doors and painted floor number
+    const nums = [n * 3 + 2, n * 3 + 3, n * 3 + 4];
+    buildDoor(-1.9, y0, -HALL_D + 0.01, 0, doorMats[(n * 3) % 5], nums[0]);
+    buildDoor(1.0, y0, -HALL_D + 0.01, 0, doorMats[(n * 3 + 1) % 5], nums[1]);
+    buildDoor(SW - 0.01, y0, -1.3, -Math.PI / 2, doorMats[(n * 3 + 2) % 5], nums[2]);
+    plane(0.7, 0.7, -1.6, y0 + 2.1, -0.006, Math.PI, mat({ map: labelTex(String(n + 1), { w: 128, h: 128, font: 'bold 110px Arial', color: 'rgba(25,40,34,.8)' }), transparent: true }));
+  }
+
+  if (n < FLOORS - 1) {
+    // flight A (up, x 1.4..2.6), mid landing, flight B (x 0..1.2)
+    for (let i = 0; i < STEPS; i++) {
+      box(1.2, RISE * 1.5, TREAD, 2.0, y0 + (i + 1) * RISE - RISE * 0.75, (i + 0.5) * TREAD, mConcrete);
+      box(1.2, RISE * 1.5, TREAD, 0.6, y0 + H - i * RISE - RISE * 0.75, (i + 0.5) * TREAD, mConcrete);
+      if (i % 2 === 0) {
+        const z = (i + 0.5) * TREAD;
+        box(0.02, 0.9, 0.02, 1.43, y0 + 1.5 * z / RUN + 0.45, z, mMetal);
+        box(0.02, 0.9, 0.02, 1.17, y0 + H - 1.5 * z / RUN + 0.45, z, mMetal);
+      }
+    }
+    const sa = box(1.2, 0.22, FLEN, 2.0, y0 + 0.75 - 0.11 * Math.cos(TH), RUN / 2 + 0.11 * Math.sin(TH), mCeil); sa.rotation.x = -TH;
+    const sb = box(1.2, 0.22, FLEN, 0.6, y0 + 2.25 - 0.11 * Math.cos(TH), RUN / 2 - 0.11 * Math.sin(TH), mCeil); sb.rotation.x = TH;
+    const ra = box(0.05, 0.05, FLEN, 1.43, y0 + 0.75 + 0.92, RUN / 2, mRail); ra.rotation.x = -TH;
+    const rb = box(0.05, 0.05, FLEN, 1.17, y0 + 2.25 + 0.92, RUN / 2, mRail); rb.rotation.x = TH;
+    box(SW, 0.2, LAND_END - RUN, SW / 2, y0 + 1.4, (RUN + LAND_END) / 2, [mConcrete, mConcrete, mFloorLand, mCeil, mConcrete, mConcrete]);
+    // window, chute hatch, wall lamp
+    const wy = y0 + 1.5 + 1.55;
+    plane(1.2, 1.0, 1.4, wy, LAND_END - 0.01, Math.PI, mWin);
+    box(1.3, 0.05, 0.06, 1.4, wy + 0.5, LAND_END - 0.02, mCeil); box(1.3, 0.05, 0.06, 1.4, wy - 0.5, LAND_END - 0.02, mCeil);
+    box(0.05, 1.0, 0.06, 0.78, wy, LAND_END - 0.02, mCeil); box(0.05, 1.0, 0.06, 2.02, wy, LAND_END - 0.02, mCeil); box(0.04, 1.0, 0.05, 1.4, wy, LAND_END - 0.02, mCeil);
+    box(0.3, 0.26, 0.1, 0.28, y0 + 1.5 + 0.95, LAND_END - 0.5, mMetal);
+    addLamp(2.25, y0 + 1.5 + 2.3, LAND_END - 0.25, n === 1 ? 0 : rand(3.5, 5), n === 1 ? 'dead' : 'normal');
+  } else {
+    // top floor: no flight up
+    box(1.3, H, 0.1, 1.95, yc, 0.05, mWallBand);
+    interact.push({ pos: new THREE.Vector3(1.0, y0 + 1.2, -HALL_D), label: 'достать ключ', act: () => say('Твоя дверь. Ключ в кармане. (Финал появится на следующих этапах.)', 5) });
+  }
+}
+box(HALL_W + SW + 0.2, 0.2, HALL_D + LAND_END + 0.2, (SW - HALL_W) / 2, FLOORS * H - 0.1, (LAND_END - HALL_D) / 2, mCeil);
+// garbage chute
+{ const c = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, FLOORS * H, 14), mat({ color: 0x35423c })); c.position.set(0.28, FLOORS * H / 2, LAND_END - 0.28); world.add(c); }
+
+function paperTexture() {
+  return tex(256, 360, (g, w, h) => {
+    g.fillStyle = '#cfc8ae'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#222'; g.font = 'bold 17px Courier New'; g.textAlign = 'center'; g.fillText('ПРАВИЛА ПОДЪЕЗДА', w / 2, 34);
+    g.fillStyle = 'rgba(30,30,30,.75)';
+    for (let i = 0; i < 7; i++) { g.fillRect(24, 62 + i * 34, rand(150, 205), 3); g.fillRect(24, 72 + i * 34, rand(60, 180), 3); }
+    grime(g, w, h, 10, 0.1);
+  });
+}
+
+// ---------- collision ----------
+function relH(x, z) {
+  if (z <= 0) return 0;
+  if (z >= RUN) return 1.5;
+  return x > 1.3 ? 1.5 * z / RUN : 3 - 1.5 * z / RUN;
+}
+function ground(x, z, y) {
+  const h = relH(x, z);
+  const max = h === 0 ? FLOORS - 1 : FLOORS - 2;
+  return clamp(Math.round((y - h) / H), 0, max) * H + h;
+}
+function free(x, z, y) {
+  if (z < -HALL_D + R || z > LAND_END - R) return false;
+  if (z <= -R) { if (x < -HALL_W + R || x > SW - R) return false; }
+  else {
+    if (x < R || x > SW - R) return false;
+    if (z < RUN + R * 0.5 && x > 1.2 - R && x < 1.4 + R) return false;   // railing between flights
+    if (Math.hypot(x - 0.28, z - (LAND_END - 0.28)) < 0.2 + R * 0.8) return false; // chute
+    if (y < 0.75 && x < 1.3) return false;                    // lobby: nothing below
+    if (y > (FLOORS - 1) * H - 0.75 && x > 1.3) return false; // top: nothing above
+  }
+  return true;
+}
+
+// ---------- player ----------
+const P = { x: -1.9, y: 0, z: -1.7, yaw: Math.PI, pitch: 0, walked: 0, stepAcc: 0, bob: 0, speed: 0 };
+const keys = {};
+let started = false, running = false, hadLock = false, reading = false, T = 0;
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyE' && running && !e.repeat) doAction(); });
+addEventListener('keyup', e => { keys[e.code] = false; });
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  P.yaw -= e.movementX * 0.0022;
+  P.pitch = clamp(P.pitch - e.movementY * 0.0022, -1.45, 1.45);
+});
+const overlay = document.getElementById('overlay');
+function start() {
+  if (!started) { started = true; initAudio(); }
+  if (A.ctx.state === 'suspended') A.ctx.resume();
+  running = true; overlay.style.display = 'none';
+  try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+}
+overlay.addEventListener('click', start);
+renderer.domElement.addEventListener('click', () => { if (running && !document.pointerLockElement) start(); });
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement) { hadLock = true; return; }
+  if (hadLock && running) {
+    running = false; for (const k in keys) keys[k] = false;
+    document.getElementById('go').textContent = 'Пауза. Нажми, чтобы вернуться';
+    overlay.style.display = 'flex'; A.ctx && A.ctx.suspend();
+  }
+});
+
+// ---------- ui ----------
+const elHint = document.getElementById('hint'), elMsg = document.getElementById('msg'), elPaper = document.getElementById('paper');
+let msgT = 0;
+function say(t, dur = 3.5) { elMsg.textContent = t; elMsg.style.opacity = 1; msgT = dur; }
+const RULES = [
+  'Лифт не работает. Не вызывайте его.',
+  'После 23:00 на лестнице не шуметь.',
+  'Не останавливайтесь между этажами.',
+  'Если слышите шаги снизу — не ждите.',
+  'В глазки чужих квартир не смотреть.',
+  'Выключатели не трогать.',
+  'Дверь в квартиру открывайте не спеша.',
+];
+function togglePaper(on) {
+  reading = on;
+  if (on) elPaper.innerHTML = '<h2>ПРАВИЛА ПОДЪЕЗДА</h2><ol>' + RULES.map(r => `<li>${r}</li>`).join('') + '</ol><div class="sign">Управдом</div><div class="close">E — отойти</div>';
+  elPaper.style.display = on ? 'block' : 'none';
+}
+let target = null;
+const vDir = new THREE.Vector3(), vTo = new THREE.Vector3();
+function findTarget() {
+  camera.getWorldDirection(vDir);
+  let best = null, bd = 1.8;
+  for (const it of interact) {
+    vTo.copy(it.pos).sub(camera.position); const d = vTo.length();
+    if (d < bd && vTo.normalize().dot(vDir) > 0.78) { bd = d; best = it; }
+  }
+  target = best;
+  elHint.textContent = best ? 'E — ' + best.label : '';
+  elHint.style.opacity = best && !reading ? 1 : 0;
+}
+function doAction() {
+  if (reading) return togglePaper(false);
+  if (target) target.act();
+}
+
+// ---------- audio ----------
+const A = { ctx: null };
+function initAudio() {
+  const ctx = A.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  A.master = ctx.createGain(); A.master.gain.value = 0.9;
+  const comp = ctx.createDynamicsCompressor(); A.master.connect(comp).connect(ctx.destination);
+  // stairwell reverb
+  const sr = ctx.sampleRate, len = sr * 3.2, ir = ctx.createBuffer(2, len, sr);
+  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6) * (i < sr * 0.012 ? 0.2 : 1); }
+  A.conv = ctx.createConvolver(); A.conv.buffer = ir;
+  const wet = ctx.createGain(); wet.gain.value = 0.5; A.conv.connect(wet).connect(A.master);
+  A.noise = ctx.createBuffer(1, sr * 2, sr);
+  { const d = A.noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+  // air
+  const air = ctx.createBufferSource(); air.buffer = A.noise; air.loop = true;
+  const af = ctx.createBiquadFilter(); af.type = 'lowpass'; af.frequency.value = 170;
+  const ag = ctx.createGain(); ag.gain.value = 0.22; air.connect(af).connect(ag).connect(A.master); air.start();
+  // lamp hum
+  const hum = ctx.createOscillator(); hum.type = 'sawtooth'; hum.frequency.value = 100;
+  const hf = ctx.createBiquadFilter(); hf.type = 'lowpass'; hf.frequency.value = 500;
+  A.hum = ctx.createGain(); A.hum.gain.value = 0.006; hum.connect(hf).connect(A.hum).connect(A.master); hum.start();
+  // tension: low drone and a thin high tone that grow as the follower closes in
+  A.drone = ctx.createGain(); A.drone.gain.value = 0;
+  for (const f of [55, 58.2, 82.7]) { const o = ctx.createOscillator(); o.frequency.value = f; o.connect(A.drone); o.start(); }
+  A.drone.connect(A.master);
+  A.ring = ctx.createGain(); A.ring.gain.value = 0;
+  { const o = ctx.createOscillator(); o.frequency.value = 3140; o.connect(A.ring).connect(A.master); o.start(); }
+}
+// generic thud: filtered noise burst + sine drop. pos = THREE.Vector3 for spatial sound
+function thud(o) {
+  const ctx = A.ctx, t = ctx.currentTime + (o.delay || 0);
+  const out = ctx.createGain(); out.gain.value = o.gain;
+  const n = ctx.createBufferSource(); n.buffer = A.noise; n.playbackRate.value = rand(0.6, 1.1);
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.cutoff;
+  const ng = ctx.createGain(), len = o.len || 0.12;
+  ng.gain.setValueAtTime(0, t); ng.gain.linearRampToValueAtTime(o.noise ?? 0.6, t + 0.004); ng.gain.exponentialRampToValueAtTime(0.001, t + len);
+  n.connect(f).connect(ng).connect(out); n.start(t, rand(0, 1.5), len + 0.05);
+  const os = ctx.createOscillator(), og = ctx.createGain();
+  os.frequency.setValueAtTime(o.f0 || 110, t); os.frequency.exponentialRampToValueAtTime(o.f1 || 45, t + 0.09);
+  og.gain.setValueAtTime(0, t); og.gain.linearRampToValueAtTime(o.thump ?? 0.8, t + 0.005); og.gain.exponentialRampToValueAtTime(0.001, t + 0.17);
+  os.connect(og).connect(out); os.start(t); os.stop(t + 0.22);
+  let tail = out;
+  if (o.pos) {
+    const p = ctx.createPanner(); p.panningModel = 'HRTF'; p.rolloffFactor = 0;
+    if (p.positionX) { p.positionX.value = o.pos.x; p.positionY.value = o.pos.y; p.positionZ.value = o.pos.z; } else p.setPosition(o.pos.x, o.pos.y, o.pos.z);
+    out.connect(p); tail = p;
+  }
+  tail.connect(A.master);
+  const send = ctx.createGain(); send.gain.value = o.send ?? 0.4; tail.connect(send).connect(A.conv);
+}
+function tick(freq, gain, delay = 0, pos) {   // short metallic / electric tick
+  const ctx = A.ctx, t = ctx.currentTime + delay, o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = 'triangle'; o.frequency.value = freq;
+  g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0005, t + 0.09);
+  o.connect(g); g.connect(A.master); const s = ctx.createGain(); s.gain.value = 0.8; g.connect(s).connect(A.conv);
+  o.start(t); o.stop(t + 0.1);
+}
+function sfxClunk() { thud({ gain: 0.5, cutoff: 900, f0: 160, f1: 70, send: 0.5 }); tick(420, 0.05, 0.03); }
+function selfStep(onStairs) {
+  thud({ gain: 0.2 + Math.random() * 0.05, cutoff: onStairs ? 1500 : 2100, f0: rand(120, 150), f1: 60, thump: 0.45, noise: 0.5, len: 0.07, send: 0.3 });
+}
+function updateListener() {
+  const L = A.ctx.listener, p = camera.position; camera.getWorldDirection(vDir);
+  if (L.positionX) {
+    L.positionX.value = p.x; L.positionY.value = p.y; L.positionZ.value = p.z;
+    L.forwardX.value = vDir.x; L.forwardY.value = vDir.y; L.forwardZ.value = vDir.z;
+    L.upX.value = 0; L.upY.value = 1; L.upZ.value = 0;
+  } else { L.setPosition(p.x, p.y, p.z); L.setOrientation(vDir.x, vDir.y, vDir.z, 0, 1, 0); }
+}
+
+// ---------- the follower ----------
+// c = closeness 0..1. Grows while the player stands, shrinks while the player walks.
+const F = { c: 0, still: 0, next: 0, arrived: false, active: false, extraCd: 20, pos: new THREE.Vector3() };
+function followerPos(gap) {   // a point on the stairs `gap` metres of height below the player
+  const y = P.y - gap;
+  if (y < 0) return F.pos.set(-1.9, 0.2, -HALL_D - 1 + y * 1.5);   // still outside the front door
+  const n = Math.floor(y / H), h = y - n * H;
+  return h < 1.5 ? F.pos.set(2.0, y, h / 1.5 * RUN) : F.pos.set(0.6, y, (3 - h) / 1.5 * RUN);
+}
+function followerStep(c, extra) {
+  const pos = extra ? F.pos.set(P.x + Math.sin(P.yaw) * 1.6, P.y - 0.3, P.z + Math.cos(P.yaw) * 1.6) : followerPos(lerp(4.6, 0.8, c));
+  const g = lerp(0.07, 1.0, Math.pow(c, 1.5));
+  thud({ gain: g, cutoff: lerp(240, 2400, c), f0: 95, f1: 38, thump: 1, noise: 0.45, len: 0.16, send: lerp(0.9, 0.3, c), pos });
+  thud({ gain: g * 0.4, cutoff: lerp(300, 3000, c), f0: 130, f1: 60, thump: 0.3, noise: 0.6, len: 0.06, send: 0.5, pos, delay: 0.07 }); // heel, then sole
+}
+function breath() {   // it is right behind you now, and it stopped
+  const ctx = A.ctx, t = ctx.currentTime, n = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+  n.buffer = A.noise; f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 0.8;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.09, t + 0.9); g.gain.linearRampToValueAtTime(0, t + 2.2);
+  const p = ctx.createPanner(); p.panningModel = 'HRTF'; p.rolloffFactor = 0;
+  const x = P.x + Math.sin(P.yaw) * 0.6, z = P.z + Math.cos(P.yaw) * 0.6;
+  if (p.positionX) { p.positionX.value = x; p.positionY.value = P.y + 1.5; p.positionZ.value = z; } else p.setPosition(x, P.y + 1.5, z);
+  n.connect(f).connect(g).connect(p).connect(A.master); n.start(t, 0, 2.3);
+}
+function updateFollower(dt, moving) {
+  if (!F.active) { if (P.y > 0.5 || T > 25) F.active = true; else return; }
+  F.extraCd -= dt;
+  if (moving) { F.still = 0; F.c = Math.max(0, F.c - dt / 7); F.arrived = false; F.next = 0.3; }
+  else {
+    F.still += dt;
+    if (F.still > 0.7) {
+      F.c = Math.min(1, F.c + dt / 16);
+      if (F.c < 1) { F.next -= dt; if (F.next <= 0) { followerStep(F.c); F.next = lerp(0.56, 1.05, F.c) + rand(0, 0.06); } }
+      else if (!F.arrived) { F.arrived = true; breath(); }
+    }
+  }
+  const now = A.ctx.currentTime;
+  A.drone.gain.setTargetAtTime(0.02 + 0.2 * F.c * F.c, now, 0.4);
+  A.ring.gain.setTargetAtTime(0.012 * Math.pow(F.c, 3), now, 0.4);
+}
+
+// ---------- world randomness ----------
+let blackoutT = rand(25, 50), farT = rand(12, 25);
+function updateWorld(dt) {
+  blackoutT -= dt;
+  if (blackoutT <= 0) {
+    blackoutT = rand(25, 70);
+    let best = null, bd = 1e9;
+    for (const l of lamps) if (l.kind === 'normal' && l.off <= 0) { const d = Math.abs(l.light.position.y - (P.y + 2.3)) + Math.random(); if (d < bd) { bd = d; best = l; } }
+    if (best) { best.off = rand(2, 7); tick(1900, 0.03); }
+  }
+  let hum = 0.004;
+  for (const l of lamps) {
+    let f = 1;
+    if (l.kind === 'dead') f = 0;
+    else if (l.kind === 'flicker') {
+      l.t -= dt;
+      if (l.t <= 0) { l.on = !l.on; l.t = l.on ? (Math.random() < 0.65 ? rand(0.03, 0.14) : rand(0.6, 3.5)) : rand(0.03, 0.25); }
+      f = l.on ? rand(0.85, 1) : 0.04;
+    }
+    if (l.off > 0) { l.off -= dt; f = 0; if (l.off <= 0) tick(1500, 0.03); }
+    f *= 1 - 0.45 * F.c * F.c;
+    if (F.arrived && Math.abs(l.light.position.y - P.y - 2.4) < 1.2) f *= rand(0.35, 0.6);
+    l.light.intensity = l.base * f;
+    l.bulb.material.color.setRGB(0.08 + f, 0.08 + 0.8 * f, 0.07 + 0.55 * f);
+    if (f > 0.1 && Math.abs(l.light.position.y - P.y - 2.4) < 1.6) hum += l.kind === 'flicker' ? 0.014 : 0.003;
+  }
+  A.hum.gain.setTargetAtTime(hum, A.ctx.currentTime, 0.05);
+  // distant life of the house
+  farT -= dt;
+  if (farT <= 0) {
+    farT = rand(18, 45);
+    const pos = new THREE.Vector3(rand(-3, 2), P.y + rand(4, 9), rand(-3, 3));
+    if (Math.random() < 0.5) { const f0 = rand(500, 900); for (let i = 0; i < 3; i++) tick(f0, 0.025, i * rand(0.25, 0.4)); }   // pipes
+    else thud({ gain: 0.25, cutoff: 260, f0: 70, f1: 35, len: 0.3, send: 1, pos });                                           // a door, far above
+  }
+}
+
+// ---------- loop ----------
+const clock = new THREE.Clock();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (running) {
+    T += dt;
+    const px = P.x, pz = P.z;
+    if (!reading) {
+      const fw = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+      const st = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+      if (fw || st) {
+        const onStairs = P.z > 0 && P.z < RUN;
+        const sp = (onStairs ? 1.75 : 2.3) * dt / Math.hypot(fw, st);
+        const sx = Math.sin(P.yaw), cz = Math.cos(P.yaw);
+        const dx = (-sx * fw + cz * st) * sp, dz = (-cz * fw - sx * st) * sp;
+        if (free(P.x + dx, P.z, P.y)) P.x += dx;
+        if (free(P.x, P.z + dz, P.y)) P.z += dz;
+      }
+    }
+    const dist = Math.hypot(P.x - px, P.z - pz);
+    P.speed = lerp(P.speed, dist / dt, 0.3);
+    const moving = P.speed > 0.4;
+    P.y += (ground(P.x, P.z, P.y) - P.y) * Math.min(1, dt * 16);
+    const onStairs = P.z > 0 && P.z < RUN;
+    P.stepAcc += dist; P.bob += dist;
+    const stride = onStairs ? TREAD * 1.05 : 0.68;
+    if (P.stepAcc > stride) {
+      P.stepAcc = 0; selfStep(onStairs);
+      if (F.active && F.extraCd <= 0 && Math.random() < 0.05) { F.extraCd = rand(25, 60); setTimeout(() => running && followerStep(0.55, true), 260); }
+    }
+    camera.position.set(P.x, P.y + EYE + Math.sin(P.bob / stride * Math.PI) * 0.022, P.z);
+    camera.rotation.set(P.pitch, P.yaw, 0);
+    updateFollower(dt, moving);
+    updateWorld(dt);
+    updateListener();
+    findTarget();
+    if (msgT > 0 && (msgT -= dt) <= 0) elMsg.style.opacity = 0;
+  } else if (!started) {
+    camera.position.set(P.x, EYE, P.z); camera.rotation.set(0, P.yaw, 0);
+  }
+  renderer.render(scene, camera);
+}
+frame();
+window.__g = { P, F, lamps, A, start, free, ground };
+</script>
+</body>
+</html>
