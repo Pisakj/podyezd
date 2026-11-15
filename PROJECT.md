@@ -16,6 +16,10 @@ Needs internet once for three.js (jsDelivr CDN, r160). No build step, no assets.
 - follower: `F.c` closeness 0..1, grows while standing, shrinks while walking
 - `window.__g` exposes state for testing in the console
 
+## Deploy
+
+GitHub Pages from `main`, root. Repo: https://github.com/Pisakj/podyezd, live at https://pisakj.github.io/podyezd/. A push to `main` republishes in about a minute.
+
 ## Testing
 
 `?order=switch,back,loop` fixes which puzzle is on floors 1-3 (random otherwise).
