@@ -252,17 +252,20 @@ function buildDoor(x, y, z, ry, m, number, floor) {
   const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = ry; world.add(g);
   box(1.02, 2.14, 0.05, 0, 1.07, 0.0, mDark, g);
   plane(0.9, 2.05, 0, 1.025, 0.03, 0, mVoid, g);                 // what is behind the door
+  // `leaf.rotation.y` is how far the door is open (0..0.6); the visible leaf `sw` swings the other way, out into the hall,
+  // so that an ajar door shows a narrow dark gap at its free edge
   const leaf = new THREE.Group(); leaf.position.set(-0.45, 0, 0.02); g.add(leaf);
-  box(0.9, 2.05, 0.07, 0.45, 1.025, 0, m, leaf);
-  box(0.03, 0.12, 0.05, 0.81, 1.0, 0.04, mMetal, leaf);
+  const sw = new THREE.Group(); leaf.add(sw);
+  box(0.9, 2.05, 0.07, 0.45, 1.025, 0, m, sw);
+  box(0.03, 0.12, 0.05, 0.81, 1.0, 0.04, mMetal, sw);
   if (number == null) return g;
   const lit = !isEmptyFloor(floor) && Math.random() < 0.6;   // light is on inside
   const peep = new THREE.Mesh(new THREE.CircleGeometry(0.02, 10), new THREE.MeshBasicMaterial({ color: lit ? 0xffb060 : 0x101214, fog: false }));
-  peep.position.set(0.45, 1.5, 0.037); leaf.add(peep);
+  peep.position.set(0.45, 1.5, 0.037); sw.add(peep);
   const p = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.09), mat({ map: labelTex(String(number), { bg: '#b9a878', font: 'bold 84px Arial' }) }));
-  p.position.set(0.45, 1.75, 0.037); leaf.add(p);
+  p.position.set(0.45, 1.75, 0.037); sw.add(p);
   box(0.8, 0.02, 0.45, 0, 0.01, 0.3, mMat, g);
-  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, floor, own: floor === FLOORS - 1 && x === 1.0, ry };
+  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, sw, ajar: 0, floor, own: floor === FLOORS - 1 && x === 1.0, ry };
   doors.push(d);
   interact.push({ pos: d.pos, label: 'заглянуть в щель', on: () => leaf.rotation.y > 0.25 && !pk.on, act: () => startPeek(d) });
   interact.push({ pos: d.pos, label: 'посмотреть в глазок', on: () => leaf.rotation.y < 0.05 && !pk.on && !d.own, act: () => startHole(d) });
@@ -271,10 +274,16 @@ function buildDoor(x, y, z, ry, m, number, floor) {
 const mVoid = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
 const mMat = mat({ color: 0x2e241c });
 const GRAFFITI = ['ЦОЙ ЖИВ', 'НЕ СТОЙ', 'тише', 'здесь был Саня', 'ОН ИДЁТ,\nКОГДА ТЫ СТОИШЬ', 'Оля, выходи', '15 кв. — кто там?', 'не оборачивайся'].sort(() => Math.random() - 0.5);
+{ // 'НЕ СТОЙ' must be used (six of eight are), and not on the first landing, where nothing happens yet
+  const i = GRAFFITI.indexOf('НЕ СТОЙ'), k = 2 + Math.floor(Math.random() * 5); [GRAFFITI[i], GRAFFITI[k]] = [GRAFFITI[k], GRAFFITI[i]]; }
+let changing = null;   // the scribble that reads differently the second time
 function graffiti(x, y, z, ry) {
   const t = GRAFFITI.pop(); if (!t) return;
-  const p = plane(1.1, 0.5, x, y, z, ry, mat({ map: labelTex(t, { w: 512, h: 232, font: `italic ${t.length > 14 ? 44 : 60}px "Comic Sans MS", "Marker Felt", cursive`, color: 'rgba(15,18,22,.8)', lh: 60 }), transparent: true }));
+  const scrawl = (txt) => tex(512, 232, (g) => { g.fillStyle = 'rgba(15,18,22,.8)'; g.font = 'italic 52px "Comic Sans MS", "Marker Felt", cursive'; g.textBaseline = 'middle'; g.fillText(txt, 24, 116); });
+  const map = t === 'НЕ СТОЙ' ? scrawl(t) : labelTex(t, { w: 512, h: 232, font: `italic ${t.length > 14 ? 44 : 60}px "Comic Sans MS", "Marker Felt", cursive`, color: 'rgba(15,18,22,.8)', lh: 60 });
+  const p = plane(1.1, 0.5, x, y, z, ry, mat({ map, transparent: true }));
   p.rotation.z = rand(-0.12, 0.12);
+  if (t === 'НЕ СТОЙ') changing = { mesh: p, x, y, z, after: scrawl('НЕ СТОЙ ЗДЕСЬ'), look: 0, seen: false, done: false };
 }
 
 // ---------- puzzles ----------
@@ -1092,6 +1101,24 @@ function updateYard() {
   }
 }
 
+// Changed behind your back. Once per run, on the empty floor without the darkness: the door right by the stairs,
+// which the player has just walked past, stands ajar once they are a flight up and not looking. No sound.
+const behind = { door: null, visited: false, done: false };
+function updateBehind() {
+  if (behind.done) return;
+  const n = FLICKER_FLOOR, d = behind.door || (behind.door = doors.find(d => d.floor === n && Math.abs(d.pos.x - (SW - 0.01)) < 0.1));
+  if (Math.abs(P.y - n * H) < 0.05 && P.z < -0.3) behind.visited = true;
+  const gone = behind.visited && (SHOW.has('door') || P.y > n * H + 1.45);
+  if (gone && unseen(d.pos.x, d.pos.y, d.pos.z)) { d.ajar = 0.5; d.leaf.rotation.y = 0.5; behind.done = true; }
+}
+// And one scribble on a landing says a word more after it has been read once: the change is made while it is off screen.
+function updateGraffiti(dt) {
+  const c = changing; if (!c || c.done) return;
+  const dist = vTo.set(c.x, c.y, c.z).sub(camera.position).length(); camera.getWorldDirection(vDir);
+  if (!c.seen) { c.look = dist < 4.5 && vTo.normalize().dot(vDir) > 0.85 ? c.look + dt : 0; if (c.look > 0.4) c.seen = true; }
+  else if (unseen(c.x, c.y, c.z)) { c.mesh.material.map = c.after; c.done = true; }
+}
+
 // ---------- world randomness ----------
 let blackoutT = rand(25, 50), farT = rand(40, 90);
 function onFloorOf(test) { const n = Math.round(P.y / H); return Math.abs(P.y - n * H) < 0.75 && test(n); }   // on a floor of that kind, not on the stairs between
@@ -1140,7 +1167,7 @@ function updateWorld(dt) {
       }
     }
     for (const d of doors) {
-      const a = d.leaf.rotation.y;
+      const a = d.leaf.rotation.y; d.sw.rotation.y = -1.6 * a;
       if (a !== d.ajar) { const na = a + clamp(d.ajar - a, -dt * 0.9, dt * 0.35); d.leaf.rotation.y = na; if (na === 0) thud({ gain: 0.35, cutoff: 700, f0: 110, f1: 55, len: 0.08, send: 0.5, pos: d.pos }); }
     }
   }
@@ -1199,7 +1226,7 @@ function frame() {
     torch.intensity = blinkT > 0 || torchOff > 0 || D.t >= 0 ? 0 : torchBase * tf;
     torch.target.position.set(Math.sin(T * 0.9) * 0.025, -0.06 + Math.sin(P.bob * 4.6) * 0.015, -1);
     post.uniforms.time.value = T; post.uniforms.fear.value = F.c;
-    updateDark(dt); updateTrail(dt, moving); updateYard();
+    updateDark(dt); updateTrail(dt, moving); updateYard(); updateBehind(); updateGraffiti(dt);
     updateFollower(dt, E.t >= 0 ? false : moving);
     updateBack(dt); updateFinale(dt); post.uniforms.fade.value = E.fade * updateCatch(dt);
     updateWorld(dt);
@@ -1215,7 +1242,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail, yard };
+window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail, yard, behind, get changing() { return changing; } };
 </script>
 </body>
 </html>
