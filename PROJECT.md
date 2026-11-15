@@ -50,6 +50,8 @@ One effect per floor at most:
 | the other of 2, 4 | nothing but a flickering lamp. No sounds behind doors, dark peepholes |
 | 6 home | the finale |
 
+Peepholes: E on any closed flat door looks in. A blurred glow if the light is on inside, black if not. Once per run at most (30% per look) the glow is slowly covered from the other side.
+
 Random events (a lamp going out, the torch cutting out, distant sounds, a step behind, fingers on a rail) fire only on the stairs between floors. The follower itself works everywhere above the lobby.
 
 ## Testing

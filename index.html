@@ -263,6 +263,7 @@ function buildDoor(x, y, z, ry, m, number, floor) {
   const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, floor, own: floor === FLOORS - 1 && x === 1.0, ry };
   doors.push(d);
   interact.push({ pos: d.pos, label: 'заглянуть в щель', on: () => leaf.rotation.y > 0.25 && !pk.on, act: () => startPeek(d) });
+  interact.push({ pos: d.pos, label: 'посмотреть в глазок', on: () => leaf.rotation.y < 0.05 && !pk.on && !d.own, act: () => startHole(d) });
   return g;
 }
 const mVoid = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
@@ -541,11 +542,45 @@ const HINT_AFTER = 90, floorTime = { 1: 0, 3: 0, 5: 0 };   // seconds spent on e
 function solved(n) { const p = puzzleOf(n); return p === 'switch' ? S.solved : p === 'back' ? B.solved : L.solved; }
 const STRANGE = ['head', 'chair', 'block', 'fifteen'].sort(() => Math.random() - 0.5);
 function startPeek(d) {
+  pk.mode = 'gap';
   // the gap shows the answer only to someone who has been stuck on this floor for a while; otherwise something odd
   const fl = d.floor, stuck = isPuzzleFloor(fl) && !solved(fl) && floorTime[fl] >= HINT_AFTER;
   if (stuck) d.kind = 'hint'; else if (!d.kind || d.kind === 'hint') d.kind = STRANGE.pop() || 'chair';
   pk.on = true; pk.d = d; pk.t = 0; pk.yaw0 = P.yaw;
   pc.width = Math.round(innerWidth / 2.5); pc.height = Math.round(innerHeight / 2.5); pc.style.display = 'block';
+}
+// Looking into a peephole from outside: a blurred glow if the light is on inside, blackness if not. Almost always nothing.
+// Once per run at most, with a 30% chance on each look, the glow is slowly covered: someone on the other side is looking back.
+let holeUsed = false;
+function startHole(d) {
+  pk.mode = 'hole'; pk.on = true; pk.d = d; pk.t = 0; pk.yaw0 = P.yaw;
+  pk.blockAt = !holeUsed && d.lit && Math.random() < 0.3 ? rand(1.5, 3) : -1;
+  pc.width = Math.round(innerWidth / 2.5); pc.height = Math.round(innerHeight / 2.5); pc.style.display = 'block';
+}
+function drawHole(dt) {
+  const was = pk.t; pk.t += dt; const W = pc.width, Hh = pc.height, g = pg, d = pk.d, t = pk.t, cx = W / 2, cy = Hh / 2, r = Hh * 0.3;
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, Hh);
+  g.save(); g.beginPath(); g.arc(cx, cy, r, 0, 7); g.clip();
+  g.fillStyle = '#030303'; g.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+  if (d.lit) {
+    const pan = clamp((P.yaw - pk.yaw0) * r * 1.5, -r * 0.3, r * 0.3), flick = 0.85 + 0.15 * Math.sin(t * 11) * Math.sin(t * 4.7);
+    const gl = g.createRadialGradient(cx + pan, cy - r * 0.1, r * 0.05, cx + pan, cy, r * 1.1);
+    gl.addColorStop(0, `rgba(190,135,65,${0.5 * flick})`); gl.addColorStop(0.5, `rgba(90,60,28,${0.35 * flick})`); gl.addColorStop(1, 'rgba(10,7,4,0)');
+    g.fillStyle = gl; g.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+    for (const [x, w, a] of [[-0.55, 0.2, 0.5], [0.42, 0.28, 0.4]]) { g.fillStyle = `rgba(4,3,2,${a})`; g.fillRect(cx + pan * 1.6 + x * r, cy - r, w * r, 2 * r); }   // vague upright shapes inside
+    if (pk.blockAt > 0 && t > pk.blockAt) {
+      if (was <= pk.blockAt) creak(d.pos);
+      const c = Math.min(1, (t - pk.blockAt) / 0.7);
+      const cv = g.createRadialGradient(cx - r * (1.2 - c * 1.2), cy, r * 0.2, cx - r * (1.2 - c * 1.2), cy, r * (0.6 + c * 1.6));
+      cv.addColorStop(0, 'rgba(0,0,0,1)'); cv.addColorStop(0.75, 'rgba(0,0,0,.96)'); cv.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = cv; g.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+      if (c >= 1) { d.lit = false; holeUsed = true; pk.blockAt = -1; d.peep.material.color.set(0x030303); }
+    }
+  }
+  g.restore();
+  const rim = g.createRadialGradient(cx, cy, r * 0.55, cx, cy, r); rim.addColorStop(0, 'rgba(0,0,0,0)'); rim.addColorStop(1, 'rgba(0,0,0,1)');
+  g.fillStyle = rim; g.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+  for (let i = 0; i < 220; i++) { const a = Math.random() * 7, q = Math.sqrt(Math.random()) * r; g.fillStyle = `rgba(255,255,255,${Math.random() * 0.06})`; g.fillRect(cx + Math.cos(a) * q, cy + Math.sin(a) * q, 1, 1); }
 }
 function endPeek() {
   if (!pk.on) return;
@@ -1083,7 +1118,7 @@ function frame() {
     updateWorld(dt);
     updateListener();
     findTarget();
-    if (pk.on) { drawPeek(dt); elHint.textContent = 'E — отойти'; elHint.style.opacity = 0.6; }
+    if (pk.on) { (pk.mode === 'hole' ? drawHole : drawPeek)(dt); elHint.textContent = 'E — отойти'; elHint.style.opacity = 0.6; }
     if (msgT > 0 && (msgT -= dt) <= 0) elMsg.style.opacity = 0;
   } else if (!started) {
     camera.position.set(P.x, EYE, P.z); camera.rotation.set(0, P.yaw, 0);
