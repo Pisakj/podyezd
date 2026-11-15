@@ -33,6 +33,9 @@ URL parameters, all optional:
 | `order` | random | Puzzles on floors 1, 3, 5, e.g. `switch,back,loop` |
 | `dark` | random | Which empty floor (2 or 4) has the announced darkness. The other one gets the flickering lamp |
 | `shepard` | 0.012 | Volume of the falling tone on the loop floor |
+| `res` | 300 | Picture height in pixels (120-1080), stretched to the window. Lower is coarser |
+| `trail` | 1.5 | How many flights behind the player the footprints stay |
+| `show` | none | `steps`, `window`, `door` (comma separated): make that quiet visual event happen at once, for checking |
 
 Other values worth knowing, constants in `index.html`: `NEAR` (0.88, closeness at which everything goes silent), `HINT_AFTER` (90 s stuck on a floor before the door gap shows the answer), `DOOR_SND_COUNT` (3 flats with sound), `minC` in `updateFollower` (0.08 per floor, 0.48 on the top floor), silence before the catch (6-10 s), torch dropouts (0.3-1.5 s every 40-90 s), distant sounds (`farT`, every 40-90 s).
 
@@ -52,6 +55,15 @@ One effect per floor at most:
 
 Peepholes: E on any closed flat door looks in. A blurred glow if the light is on inside, black if not. Once per run at most (30% per look) the glow is slowly covered from the other side.
 
+Quiet visual events. They make no sound, nothing is sudden, and nothing appears or changes on screen: every change waits until the spot is off screen (`unseen()`, by camera direction). None of them is on a puzzle floor.
+
+| Event | Where | What |
+|---|---|---|
+| Footprints (`updateTrail`) | stair treads only | Wet prints follow about 1.5 flights behind, left and right in turn. After the player has stood 3 s the chain ends in a pair side by side. A print dries after 60 s |
+| Window opposite (`updateYard`) | landing windows | Facade across the yard with one dimly lit window and a still dark shape in it, always level with the player. From level 4 the shape is larger |
+| Door behind (`updateBehind`) | the empty floor without the darkness | Once per run the door by the stairs stands ajar after the player has climbed a flight |
+| Scribble (`updateGraffiti`) | one landing, never the first | "НЕ СТОЙ" reads "НЕ СТОЙ ЗДЕСЬ" after it has been looked at once |
+
 Random events (a lamp going out, the torch cutting out, distant sounds, a step behind, fingers on a rail) fire only on the stairs between floors. The follower itself works everywhere above the lobby.
 
 ## Testing
@@ -62,4 +74,4 @@ A full run can be scripted through `window.__g` (player state, puzzle state) wit
 
 ## Status
 
-Whole game is in and tuned for quiet dread (2026-11-16): seven levels with empty floors, announced darkness, Shepard tone. Now: playtests and manual tuning of the values above.
+Whole game is in and tuned for quiet dread (2026-11-16): seven levels with empty floors, announced darkness, Shepard tone, peepholes, quiet visual events, coarse 300-line picture. Now: playtests and manual tuning of the values above.

@@ -1092,7 +1092,7 @@ function updateTrail(dt, moving) {
 // shows the lit window in a different row; all of them are redrawn only while they are off screen. From the fourth
 // level the shape is a little bigger, as if it had stepped up to the glass. While it is looked at, nothing moves.
 function updateYard() {
-  const lf = Math.round((P.y + 1.5) / H), near = SHOW.has('window') || Math.floor((P.y + 0.05) / H) >= 4;
+  const lf = Math.min(TOP, Math.round((P.y + 1.5) / H)), near = SHOW.has('window') || Math.floor((P.y + 0.05) / H) >= 4;
   for (const w of yard) {
     const rel = lf - (w.n + 1), key = (Math.abs(rel) <= 2 ? rel : 'none') + (near ? 'n' : 'f');
     if (w.key === key) continue;
