@@ -260,7 +260,7 @@ function buildDoor(x, y, z, ry, m, number, floor) {
   const p = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.09), mat({ map: labelTex(String(number), { bg: '#b9a878', font: 'bold 84px Arial' }) }));
   p.position.set(0.45, 1.75, 0.037); leaf.add(p);
   box(0.8, 0.02, 0.45, 0, 0.01, 0.3, mMat, g);
-  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, peeped: false, knocked: false, floor, silenced: false, own: floor === FLOORS - 1 && x === 1.0, ry };
+  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, floor, own: floor === FLOORS - 1 && x === 1.0, ry };
   doors.push(d);
   interact.push({ pos: d.pos, label: 'заглянуть в щель', on: () => leaf.rotation.y > 0.25 && !pk.on, act: () => startPeek(d) });
   return g;
@@ -508,8 +508,7 @@ const fingers = new THREE.Group(); fingers.visible = false; world.add(fingers);
 { const fm = mat({ color: 0x9a9080 }); for (let k = 0; k < 4; k++) box(0.017, 0.07 + (k === 1 || k === 2 ? 0.01 : 0), 0.022, (k - 1.5) * 0.024, -0.02, 0, fm, fingers); }
 const G = { cd: 30, on: false, used: false, k: 0, out: false, life: 0, show: new THREE.Vector3(), hide: new THREE.Vector3() };
 function edgeSpots() {   // [x, y, z, hide dx, dy, dz]
-  const n = Math.round(P.y / H), onFloor = Math.abs(P.y - n * H) < 0.05, y0 = n * H, fl = Math.floor(P.y / H), list = [];
-  if (onFloor && P.z < -0.3 && n <= FLOORS - 2 && !isEmptyFloor(n)) list.push([MIDX + rand(-0.2, 0.2), y0 + 2.445, RUN - 0.002, 0, 0.06, 0.09]);                         // over the rail one landing up
+  const fl = Math.floor(P.y / H), list = [];
   if (P.x < MIDX && P.z > 0.6 && P.z < 2.2 && fl <= FLOORS - 2) list.push([MIDX + rand(-0.2, 0.2), (fl + 1) * H + 0.945, 0.002, 0, 0.06, -0.09]);   // on the rail of the hall you are climbing to
   return list;
 }
@@ -594,11 +593,6 @@ function drawPeek(dt) {
   for (let i = 0; i < 260; i++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.07})`; g.fillRect(sx + Math.random() * sw, Math.random() * Hh, 1, 1); }
 }
 
-// the lift that does not work
-const lift = { floor: PUZZLE_FLOORS[Math.floor(Math.random() * 3)], state: 0, t: 0 };
-lift.strip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 1, 0.02), new THREE.MeshBasicMaterial({ color: 0xffdf9a, fog: false }));
-lift.strip.position.set(-HALL_W + 0.105, 0, -1.3); lift.strip.visible = false; world.add(lift.strip);
-lift.light = new THREE.PointLight(0xffd9a0, 0, 4, 2); lift.light.position.set(-HALL_W + 0.5, 0, -1.3); world.add(lift.light);
 
 function paperTexture(marks) {
   return tex(256, 360, (g, w, h) => {
@@ -809,19 +803,6 @@ function updateDoorSounds(dt) {
   const now = A.ctx.currentTime; camera.getWorldDirection(vDir);
   for (const d of doors) {
     const dist = camera.position.distanceTo(d.pos);
-    // stand in front of a door for a while and someone inside walks up to it
-    if (!d.own && !d.came && !isEmptyFloor(d.floor)) {
-      const facing = dist < 1.7 && P.speed < 0.4 && vTo.copy(d.pos).sub(camera.position).normalize().dot(vDir) > 0.6;
-      d.linger = facing ? (d.linger || 0) + dt : 0;
-      if (d.linger > 2.5) {
-        d.came = true;
-        if (d.au || Math.random() < 0.4) {
-          d.muted = true;
-          for (let i = 0; i < 3; i++) playBuf('pstep' + (1 + i), d.pos, 0.12 + 0.07 * i, 450, { delay: 0.9 + i * 0.6, rate: 0.9, send: 0.03 });
-          if (d.lit) setTimeout(() => d.peep.material.color.set(0x030303), 3000);
-        }
-      }
-    }
     if (!d.au) continue;
     const a = d.au, c = a.c, open = d.leaf.rotation.y > 0.2;
     if (c.live) { a.t -= dt; if (a.t <= 0) { a.on = !a.on; a.t = a.on ? rand(c.live[0], c.live[1]) : rand(c.live[2], c.live[3]); } } else a.on = true;
@@ -829,25 +810,9 @@ function updateDoorSounds(dt) {
     const life = a.on ? 0.75 + 0.25 * Math.sin(a.wob * 0.7) * Math.sin(a.wob * 0.23) : 0;   // it comes and goes, never a steady loop
     let v = c.vol * life * Math.pow(clamp(1 - dist / 4.5, 0, 1), 2) * (open ? 1.6 : 1);
     if (c.shy) { if (dist < 1.7 && !open) d.hush = true; else if (dist > 3.5) d.hush = false; if (d.hush) v = 0; }
-    if (d.muted) v = 0;
-    a.g.gain.setTargetAtTime(v, now, d.hush || d.muted ? 0.03 : a.on ? 0.8 : 1.6);
+    a.g.gain.setTargetAtTime(v, now, d.hush ? 0.03 : a.on ? 0.8 : 1.6);
     a.lp.frequency.setTargetAtTime(open ? c.lp * 3 : c.lp, now, 0.3);
   }
-}
-function rattle(pos) {
-  if (playBuf('handle', pos, 0.35, 1800)) { setTimeout(() => playBuf('knock', pos, 0.4, 900), 2800); return; }   // somebody tries the handle from inside, then one soft knock
-  for (let i = 0; i < 5; i++) thud({ gain: 0.22, cutoff: 3200, f0: rand(380, 520), f1: 240, thump: 0.3, noise: 0.7, len: 0.04, send: 0.35, pos, delay: i * 0.085 + rand(0, 0.02) });
-  thud({ gain: 0.5, cutoff: 480, f0: 120, f1: 60, len: 0.1, send: 0.5, pos, delay: 1.5 });
-}
-function liftSound(pos) {
-  if (playBuf('lift', pos, 0.9, 1200, { send: 0.5 })) return;
-  const ctx = A.ctx, t = ctx.currentTime, o = ctx.createOscillator(), n = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
-  o.type = 'sawtooth'; o.frequency.setValueAtTime(40, t); o.frequency.linearRampToValueAtTime(52, t + 3); o.frequency.linearRampToValueAtTime(38, t + 6.5);
-  n.buffer = A.noise; n.loop = true; f.type = 'lowpass'; f.frequency.value = 190;
-  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.5, t + 1.5); g.gain.setValueAtTime(0.5, t + 5); g.gain.linearRampToValueAtTime(0, t + 7);
-  o.connect(f); n.connect(f); f.connect(g).connect(p).connect(A.master); const s = ctx.createGain(); s.gain.value = 0.4; p.connect(s).connect(A.conv);
-  o.start(t); n.start(t); o.stop(t + 7.1); n.stop(t + 7.1);
-  thud({ gain: 0.5, cutoff: 500, f0: 90, f1: 40, len: 0.2, send: 0.7, pos, delay: 7 });
 }
 function gateCreak(pos) {   // long hinge creak
   if (playBuf('gateopen', pos, 0.7, 4000, { send: 0.6 })) return;
@@ -1006,11 +971,12 @@ function updateShepard(dt) {
 }
 
 // ---------- world randomness ----------
-let blackoutT = rand(25, 50), farT = rand(40, 90), eventCd = 8;
+let blackoutT = rand(25, 50), farT = rand(40, 90);
 function onFloorOf(test) { const n = Math.round(P.y / H); return Math.abs(P.y - n * H) < 0.75 && test(n); }   // on a floor of that kind, not on the stairs between
-const eventsOff = () => onFloorOf(isEmptyFloor);
-const doorState = { af: 0, lf: 0, done: {} };
-function pickDoor(n) { const ds = doors.filter(d => d.floor === n && !d.own && d.ajar === 0 && !d.kind); return ds[Math.floor(Math.random() * ds.length)]; }
+// Rule: a floor gets one effect at most. Puzzle floors have their puzzle, one empty floor has the announced darkness,
+// the top floor has the finale; the other empty floor has nothing. So random events (a lamp going out, the torch cutting out,
+// distant sounds, a step behind, fingers on a rail) only ever happen on the stairs between floors.
+const eventsOff = () => onFloorOf(n => n >= 1);
 function updateWorld(dt) {
   blinkT -= dt;
   if (F.active) { blackoutT -= dt; farT -= dt; }   // the ground floor stays uneventful
@@ -1041,25 +1007,8 @@ function updateWorld(dt) {
     if (f > 0.1 && Math.abs(l.light.position.y - P.y - 2.4) < 1.6) hum += l.kind === 'flicker' ? 0.014 : 0.003;
   }
   A.hum.gain.setTargetAtTime(hum, A.ctx.currentTime, 0.05);
-  // doors: a lit peephole may go dark when you look into it; a handle may move behind your back
-  eventCd -= dt; camera.getWorldDirection(vDir);
-  for (const d of doors) {
-    vTo.copy(d.pos).sub(camera.position); const dist = vTo.length(); if (dist > 1.7 || isEmptyFloor(d.floor)) continue;
-    const dot = vTo.normalize().dot(vDir);
-    if (d.lit && !d.peeped && dist < 1.3 && dot > 0.92) { d.peeped = true; if (Math.random() < 0.3) setTimeout(() => { d.peep.material.color.set(0x030303); creak(d.pos); }, 600); }
-    if (!d.knocked && dot < -0.3 && eventCd <= 0) { d.knocked = true; if (Math.random() < 0.35) { eventCd = 45; rattle(d.pos); } }
-  }
-  // doors: on every floor one already stands ajar when you arrive, one may open behind you as you leave. Look into the gap
-  { const af = Math.floor((P.y + 1.5) / H);
-    if (af !== doorState.af) {
-      if (af > doorState.af && isPuzzleFloor(af) && !doorState.done[af]) { const d = pickDoor(af); if (d) { doorState.done[af] = true; d.ajar = 0.5; d.leaf.rotation.y = 0.5; } }
-      doorState.af = af;
-    }
-    const lf = Math.floor((P.y - 0.9) / H);   // climbed most of the way off a floor
-    if (lf !== doorState.lf) {
-      if (lf > doorState.lf && isPuzzleFloor(lf) && P.x > MIDX && Math.random() < 0.45) { const d = pickDoor(lf); if (d) { d.ajar = 0.6; creak(d.pos); } }
-      doorState.lf = lf;
-    }
+  // the only door that ever opens: on a puzzle floor, for a player who is stuck. It is part of that floor's puzzle
+  {
     const cf = Math.round(P.y / H);
     if (isPuzzleFloor(cf) && !solved(cf)) {
       const was = floorTime[cf]; floorTime[cf] += dt;
@@ -1075,17 +1024,6 @@ function updateWorld(dt) {
   }
   updatePeeker(dt); updateDoorSounds(dt);
   updatePuzzles(dt); updateShepard(dt);
-  // lift cabin passes behind the closed doors
-  if (lift.state === 0 && Math.abs(P.y - lift.floor * H) < 0.2 && P.z < -0.5) { lift.state = 1; lift.t = -2.5; }
-  if (lift.state === 1) {
-    const was = lift.t; lift.t += dt; const y0 = lift.floor * H;
-    if (was < 0 && lift.t >= 0) liftSound(new THREE.Vector3(-HALL_W, y0 + 1, -1.3));
-    const c = y0 + 1 + (lift.t / 6 * 2 - 1) * 3.4, a = Math.max(c - 0.95, y0 + 0.03), b = Math.min(c + 0.95, y0 + 2.04);
-    const vis = lift.t > 0 && b > a;
-    lift.strip.visible = vis; lift.light.intensity = vis ? 1.2 * (b - a) : 0;
-    if (vis) { lift.strip.scale.y = b - a; lift.strip.position.y = (a + b) / 2; lift.light.position.y = (a + b) / 2; }
-    if (lift.t > 6) { lift.state = 2; lift.strip.visible = false; lift.light.intensity = 0; }
-  }
   // distant life of the house
   if (farT <= 0 && !eventsOff()) {
     farT = rand(40, 90);
@@ -1154,7 +1092,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch };
+window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch };
 </script>
 </body>
 </html>
