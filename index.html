@@ -247,7 +247,7 @@ function buildDoor(x, y, z, ry, m, number, floor) {
   const p = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.09), mat({ map: labelTex(String(number), { bg: '#b9a878', font: 'bold 84px Arial' }) }));
   p.position.set(0.45, 1.75, 0.037); leaf.add(p);
   box(0.8, 0.02, 0.45, 0, 0.01, 0.3, mMat, g);
-  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, peeped: false, knocked: false, floor, silenced: false, own: floor === FLOORS - 1 && x === 1.0 };
+  const d = { pos: new THREE.Vector3(x, y + 1.5, z), peep, lit, leaf, ajar: 0, peeped: false, knocked: false, floor, silenced: false, own: floor === FLOORS - 1 && x === 1.0, ry };
   doors.push(d);
   interact.push({ pos: d.pos, label: 'заглянуть в щель', on: () => leaf.rotation.y > 0.25 && !pk.on, act: () => startPeek(d) });
   return g;
@@ -481,50 +481,63 @@ box(HALL_W + SW + 0.2, 0.2, HALL_D + LAND_END + 0.2, (SW - HALL_W) / 2, FLOORS *
 // garbage chute
 { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, FLOORS * H, 14), mat({ color: 0x35423c })); c.position.set(0.28, FLOORS * H / 2, LAND_END - 0.28); world.add(c); }
 // what is heard behind each door: seven recordings for eleven flats, the rest are silent
-const DOOR_SND = { baby: { vol: 0.5, lp: 600 }, clock: { vol: 0.55, lp: 1500 }, cough: { vol: 0.6, lp: 700, gap: [8, 20] }, musicbox: { vol: 0.35, lp: 900 },
-  snore: { vol: 0.7, lp: 500 }, talk: { vol: 0.5, lp: 550, shy: true }, whisper: { vol: 0.7, lp: 1800, gap: [2, 6], shy: true },
-  phone: { vol: 0.5, lp: 1100, gap: [1.5, 3] }, hum: { vol: 0.6, lp: 900, shy: true }, piano: { vol: 0.5, lp: 800 }, cry: { vol: 0.5, lp: 700, shy: true },
-  scratch: { vol: 0.7, lp: 2500, gap: [5, 14] }, drip: { vol: 0.6, lp: 1600 }, radio: { vol: 0.45, lp: 900 }, laugh: { vol: 0.5, lp: 900, gap: [14, 40] } };
+// live: [on min, on max, off min, off max] seconds. gap: pause between one-shots. shy: stops when you come to the door
+const DOOR_SND = { baby: { vol: 0.2, lp: 500, live: [8, 20, 15, 45] }, clock: { vol: 0.22, lp: 1200 }, cough: { vol: 0.25, lp: 600, gap: [10, 30] },
+  musicbox: { vol: 0.14, lp: 800, live: [10, 22, 20, 50] }, snore: { vol: 0.28, lp: 450 }, talk: { vol: 0.2, lp: 500, shy: true, live: [6, 18, 5, 20] },
+  whisper: { vol: 0.3, lp: 1500, gap: [4, 12], shy: true }, phone: { vol: 0.2, lp: 900, live: [8, 14, 40, 90] }, hum: { vol: 0.25, lp: 800, shy: true, live: [8, 20, 10, 30] },
+  piano: { vol: 0.2, lp: 700, live: [8, 20, 6, 25] }, cry: { vol: 0.2, lp: 600, shy: true, live: [8, 18, 20, 50] }, scratch: { vol: 0.3, lp: 2000, gap: [8, 25] },
+  drip: { vol: 0.25, lp: 1400 }, radio: { vol: 0.18, lp: 800, live: [15, 40, 5, 15] }, laugh: { vol: 0.2, lp: 800, gap: [20, 60] } };
 // each run eight of the fifteen are behind eight of the eleven flats; the other three flats are silent
 { const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, 8).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
 world.traverse(m => { if (m.isMesh && m.material.isMeshLambertMaterial !== false && !m.material.isMeshBasicMaterial) { m.castShadow = !m.material.transparent; m.receiveShadow = true; } });
 
-// the peeker: part of a head around a corner, at the edge of the screen. Pulls back as your eyes come near.
-// Mostly it is black on black and only two faint points show; the torch catches the shape just as it goes.
-const peeker = new THREE.Group(); peeker.visible = false; world.add(peeker);
-{ const m = new THREE.MeshBasicMaterial({ color: 0x020203 });
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 10), m); head.scale.set(0.9, 1.15, 1); peeker.add(head);
-  box(0.36, 0.3, 0.2, 0, -0.33, 0, m, peeker);
-  const em = new THREE.MeshBasicMaterial({ color: 0x55554a });
-  for (const sx of [-0.037, 0.037]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.009, 6, 5), em); e.position.set(sx, 0.015, 0.098); peeker.add(e); } }
-const G = { cd: 30, on: false, k: 0, out: false, life: 0, show: new THREE.Vector3(), hide: new THREE.Vector3() };
-function peekSpots() {
-  const n = Math.round(P.y / H), onFloor = Math.abs(P.y - n * H) < 0.05, y0 = n * H, list = [];
-  if (onFloor && P.z < -0.3 && n >= 1) list.push([BXC - 0.15, y0 + 0.02, 0.75, BXC - 0.15, y0 - 0.5, 0.75]);                       // top of a head above the floor edge, on the stairs down
-  if (onFloor && P.z < -0.3 && n <= FLOORS - 2) list.push([MIDX, y0 + 2.52, RUN - 0.12, MIDX, y0 + 2.52, RUN + 0.6]);             // leaning over the rail one landing up
-  const fl = Math.floor(P.y / H);
-  if (P.x > MIDX && P.z > 0.2 && P.z < 1.7 && fl <= FLOORS - 2) list.push([0.5, fl * H + 3.0, LAND_END - 0.33, 0.3, fl * H + 3.0, LAND_END - 0.24]);   // from behind the chute ahead
+// things at the edge of sight. There is no body to look at: two faint points in the dark that are not there
+// when you turn, and fingers on a rail that let go. The rest the player imagines.
+const eyes = new THREE.Group(); eyes.visible = false; world.add(eyes);
+const mEyes = new THREE.MeshBasicMaterial({ color: 0x4a4a40, transparent: true, opacity: 0 });
+for (const sx of [-0.034, 0.034]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.011, 6, 5), mEyes); e.position.x = sx; eyes.add(e); }
+const fingers = new THREE.Group(); fingers.visible = false; world.add(fingers);
+{ const fm = mat({ color: 0x9a9080 }); for (let k = 0; k < 4; k++) box(0.017, 0.07 + (k === 1 || k === 2 ? 0.01 : 0), 0.022, (k - 1.5) * 0.024, -0.02, 0, fm, fingers); }
+const G = { cd: 30, kind: null, k: 0, out: false, life: 0, blink: 2, show: new THREE.Vector3(), hide: new THREE.Vector3() };
+function edgeSpots() {   // [kind, x, y, z, hide dx, dy, dz]
+  const n = Math.round(P.y / H), onFloor = Math.abs(P.y - n * H) < 0.05, y0 = n * H, fl = Math.floor(P.y / H), list = [];
+  if (onFloor && P.z < -0.3 && n >= 1) list.push(['eyes', BXC - 0.15, y0 + 0.05, 0.9]);                                     // low on the stairs going down
+  if (onFloor && P.z < -0.3 && n <= FLOORS - 2) {
+    list.push(['eyes', MIDX, y0 + 2.5, RUN + 0.3]);                                                                         // behind the rail one landing up
+    list.push(['fingers', MIDX + rand(-0.2, 0.2), y0 + 2.445, RUN - 0.002, 0, 0.06, 0.09]);                                 // fingers over that rail
+  }
+  if (P.x > MIDX && P.z > 0.2 && P.z < 1.7 && fl <= FLOORS - 2) list.push(['eyes', 0.52, fl * H + 3.0, LAND_END - 0.3]);    // beside the chute ahead
+  if (P.x < MIDX && P.z > 0.6 && P.z < 2.2 && fl <= FLOORS - 2) list.push(['fingers', MIDX + rand(-0.2, 0.2), (fl + 1) * H + 0.945, 0.002, 0, 0.06, -0.09]);   // on the rail of the hall you are climbing to
+  for (const d of doors) if (d.floor === n && onFloor && d.leaf.rotation.y > 0.25) {                                        // in the gap of a door ajar
+    const c = Math.cos(d.ry), sn = Math.sin(d.ry); list.push(['eyes', d.pos.x + 0.33 * c + 0.03 * sn, d.pos.y + 0.05, d.pos.z - 0.33 * sn + 0.03 * c]);
+  }
   return list;
 }
 function updatePeeker(dt) {
   G.cd -= dt; camera.getWorldDirection(vDir);
-  if (!G.on) {
+  if (!G.kind) {
     if (G.cd > 0 || !F.active || T < 40 || E.t >= 0 || C.t >= 0 || pk.on || reading) return;
-    for (const sp of peekSpots()) {
-      const dot = vTo.set(sp[0], sp[1], sp[2]).sub(camera.position).normalize().dot(vDir);
-      if (dot < 0.55 || dot > 0.9 || Math.random() < 0.5) continue;       // must be on screen, but off to the side
-      G.show.set(sp[0], sp[1], sp[2]); G.hide.set(sp[3], sp[4], sp[5]);
-      G.on = true; G.k = 0; G.out = true; G.life = 0; peeker.visible = true; break;
+    for (const sp of edgeSpots()) {
+      const dot = vTo.set(sp[1], sp[2], sp[3]).sub(camera.position).normalize().dot(vDir);
+      if (dot < 0.55 || dot > 0.9 || Math.random() < 0.5) continue;       // on screen, but off to the side
+      G.kind = sp[0]; G.show.set(sp[1], sp[2], sp[3]); G.hide.set(sp[1] + (sp[4] || 0), sp[2] + (sp[5] || 0), sp[3] + (sp[6] || 0));
+      G.k = 0; G.out = true; G.life = 0; G.blink = rand(1.5, 3); (G.kind === 'eyes' ? eyes : fingers).visible = true; break;
     }
-    if (!G.on) return;
+    if (!G.kind) return;
   }
   G.life += dt;
   vTo.copy(G.show).sub(camera.position); const dist = vTo.length(), dot = vTo.normalize().dot(vDir);
-  if (G.out && (dot > 0.955 || dist < 2 || G.life > 6)) G.out = false;
-  G.k = clamp(G.k + (G.out ? dt / 0.9 : -dt / 0.22), 0, 1);
-  peeker.position.lerpVectors(G.hide, G.show, G.k * G.k * (3 - 2 * G.k));
-  peeker.rotation.y = Math.atan2(P.x - peeker.position.x, P.z - peeker.position.z);
-  if (!G.out && G.k === 0) { peeker.visible = false; G.on = false; G.cd = rand(30, 60); }
+  if (G.out && (dot > 0.95 || dist < 2.2 || G.life > 7)) G.out = false;
+  if (G.kind === 'eyes') {
+    G.k = clamp(G.k + (G.out ? dt / 1.5 : -dt / 0.08), 0, 1);
+    G.blink -= dt; if (G.blink < -0.13) G.blink = rand(1.5, 4);
+    mEyes.opacity = G.blink < 0 ? 0 : 0.8 * G.k;
+    eyes.position.copy(G.show); eyes.rotation.y = Math.atan2(P.x - G.show.x, P.z - G.show.z);
+  } else {
+    G.k = clamp(G.k + (G.out ? dt / 1.2 : -dt / 0.25), 0, 1);
+    fingers.position.lerpVectors(G.hide, G.show, G.k * G.k * (3 - 2 * G.k));
+  }
+  if (!G.out && G.k === 0) { eyes.visible = fingers.visible = false; G.kind = null; G.cd = rand(25, 50); }
 }
 
 // looking through the gap of a door that stands ajar
@@ -558,11 +571,15 @@ function drawPeek(dt) {
   g.fillStyle = `rgba(120,80,35,${0.16 * flick})`; g.beginPath(); g.moveTo(-dw, fh); g.lineTo(dw, fh); g.lineTo(dw * 2.6, Hh * 0.5); g.lineTo(-dw * 2.6, Hh * 0.5); g.fill();
   g.fillStyle = '#040303';
   if (kind === 'chair') { g.fillRect(-dw * 0.4, fh - dh * 0.62, dw * 0.8, dh * 0.34); g.fillRect(-dw * 0.4, fh - dh * 0.3, dw * 0.08, dh * 0.3); g.fillRect(dw * 0.32, fh - dh * 0.3, dw * 0.08, dh * 0.3); g.fillRect(-dw * 0.44, fh - dh * 0.3, dw * 0.88, dh * 0.05); }
-  if (kind === 'head') {   // someone looks out from behind the far doorframe, then is not there
-    const off = t < 2.6 ? 0.16 : 0.16 - Math.min(1, (t - 2.6) / 0.5) * 0.5;
-    g.save(); g.beginPath(); g.rect(-dw, dy, 2 * dw, dh); g.clip();
-    g.beginPath(); g.ellipse(-dw + off * dw, dy + dh * 0.27, dw * 0.2, dw * 0.26, 0, 0, 7); g.fill(); g.fillRect(-dw - dw * 0.3 + off * dw, dy + dh * 0.36, dw * 0.42, dh * 0.3);
-    g.restore();
+  if (kind === 'head') {   // something soft and dark leans out past the far doorframe for a moment. Or the light flickered
+    const lean = clamp((t - 1.4) / 0.9, 0, 1) - clamp((t - 3.0) / 0.35, 0, 1);
+    if (lean > 0) {
+      const hx = -dw + (lean * 0.34 - 0.14) * dw, hy = dy + dh * 0.3, r = dw * 0.17;
+      g.save(); g.beginPath(); g.rect(-dw, dy, 2 * dw, dh); g.clip();
+      const rg = g.createRadialGradient(hx, hy, r * 0.3, hx, hy, r); rg.addColorStop(0, 'rgba(6,4,3,.9)'); rg.addColorStop(1, 'rgba(6,4,3,0)');
+      g.fillStyle = rg; g.fillRect(hx - r, hy - r * 1.2, 2 * r, 2.4 * r);
+      g.restore();
+    }
   }
   if (kind === 'hint' || kind === 'fifteen') {
     const lines = kind === 'hint' ? HINTS[puzzleOf(pk.d.floor)] : ['ОН УЖЕ', 'В 15-й'];
@@ -780,26 +797,44 @@ function startDoorSounds() {
     if (!d.snd || !A.buf[d.snd]) continue;
     const c = DOOR_SND[d.snd], lp = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(d.pos);
     lp.type = 'lowpass'; lp.frequency.value = c.lp; g.gain.value = 0; lp.connect(g).connect(p).connect(A.master);
-    const sd = ctx.createGain(); sd.gain.value = 0.2; p.connect(sd).connect(A.conv);
-    d.au = { lp, g, c };
-    const play = () => { const s = ctx.createBufferSource(); s.buffer = A.buf[d.snd]; s.connect(lp);
+    const sd = ctx.createGain(); sd.gain.value = 0.06; p.connect(sd).connect(A.conv);
+    d.au = { lp, g, c, on: Math.random() < 0.6, t: rand(2, 15), wob: rand(0, 20) };
+    const play = () => { const s = ctx.createBufferSource(); s.buffer = A.buf[d.snd]; s.playbackRate.value = rand(0.97, 1.03); s.connect(lp);
       if (c.gap) { s.onended = () => setTimeout(play, rand(c.gap[0], c.gap[1]) * 1000); s.start(); } else { s.loop = true; s.start(0, Math.random() * s.buffer.duration); } };
-    play();
+    if (c.gap) setTimeout(play, rand(0, c.gap[1]) * 1000); else play();
   }
 }
-function updateDoorSounds() {
-  const now = A.ctx.currentTime;
+function updateDoorSounds(dt) {
+  const now = A.ctx.currentTime; camera.getWorldDirection(vDir);
   for (const d of doors) {
+    const dist = camera.position.distanceTo(d.pos);
+    // stand in front of a door for a while and someone inside walks up to it
+    if (!d.own && !d.came) {
+      const facing = dist < 1.7 && P.speed < 0.4 && vTo.copy(d.pos).sub(camera.position).normalize().dot(vDir) > 0.6;
+      d.linger = facing ? (d.linger || 0) + dt : 0;
+      if (d.linger > 2.5) {
+        d.came = true;
+        if (d.au || Math.random() < 0.4) {
+          d.muted = true;
+          for (let i = 0; i < 3; i++) playBuf('pstep' + (1 + i), d.pos, 0.12 + 0.07 * i, 450, { delay: 0.9 + i * 0.6, rate: 0.9, send: 0.03 });
+          if (d.lit) setTimeout(() => d.peep.material.color.set(0x030303), 3000);
+        }
+      }
+    }
     if (!d.au) continue;
-    const c = d.au.c, dist = camera.position.distanceTo(d.pos), open = d.leaf.rotation.y > 0.2;
-    let v = c.vol * Math.pow(clamp(1 - dist / 6.5, 0, 1), 1.6) * (open ? 1.7 : 1);
-    if (c.shy) { if (dist < 1.7 && !open) d.hush = true; else if (dist > 3.5) d.hush = false; if (d.hush) v = 0; }   // some go quiet when you come to the door
-    d.au.g.gain.setTargetAtTime(v, now, d.hush ? 0.02 : 0.25);
-    d.au.lp.frequency.setTargetAtTime(open ? c.lp * 3.5 : c.lp, now, 0.3);
+    const a = d.au, c = a.c, open = d.leaf.rotation.y > 0.2;
+    if (c.live) { a.t -= dt; if (a.t <= 0) { a.on = !a.on; a.t = a.on ? rand(c.live[0], c.live[1]) : rand(c.live[2], c.live[3]); } } else a.on = true;
+    a.wob += dt;
+    const life = a.on ? 0.75 + 0.25 * Math.sin(a.wob * 0.7) * Math.sin(a.wob * 0.23) : 0;   // it comes and goes, never a steady loop
+    let v = c.vol * life * Math.pow(clamp(1 - dist / 4.5, 0, 1), 2) * (open ? 1.6 : 1);
+    if (c.shy) { if (dist < 1.7 && !open) d.hush = true; else if (dist > 3.5) d.hush = false; if (d.hush) v = 0; }
+    if (d.muted) v = 0;
+    a.g.gain.setTargetAtTime(v, now, d.hush || d.muted ? 0.03 : a.on ? 0.8 : 1.6);
+    a.lp.frequency.setTargetAtTime(open ? c.lp * 3 : c.lp, now, 0.3);
   }
 }
 function rattle(pos) {
-  if (playBuf('handle', pos, 0.7, 2500)) { setTimeout(() => playBuf('knock', pos, 0.9, 1300), 2800); return; }   // somebody tries the handle from inside, then one soft knock
+  if (playBuf('handle', pos, 0.35, 1800)) { setTimeout(() => playBuf('knock', pos, 0.4, 900), 2800); return; }   // somebody tries the handle from inside, then one soft knock
   for (let i = 0; i < 5; i++) thud({ gain: 0.22, cutoff: 3200, f0: rand(380, 520), f1: 240, thump: 0.3, noise: 0.7, len: 0.04, send: 0.35, pos, delay: i * 0.085 + rand(0, 0.02) });
   thud({ gain: 0.5, cutoff: 480, f0: 120, f1: 60, len: 0.1, send: 0.5, pos, delay: 1.5 });
 }
@@ -975,7 +1010,7 @@ function updateWorld(dt) {
       if (a !== d.ajar) { const na = a + clamp(d.ajar - a, -dt * 0.9, dt * 0.35); d.leaf.rotation.y = na; if (na === 0) thud({ gain: 0.35, cutoff: 700, f0: 110, f1: 55, len: 0.08, send: 0.5, pos: d.pos }); }
     }
   }
-  updatePeeker(dt); updateDoorSounds();
+  updatePeeker(dt); updateDoorSounds(dt);
   updatePuzzles(dt);
   // lift cabin passes behind the closed doors
   if (lift.state === 0 && Math.abs(P.y - lift.floor * H) < 0.2 && P.z < -0.5) { lift.state = 1; lift.t = -2.5; }
@@ -1053,7 +1088,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, peeker, pk, startPeek };
+window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, eyes, fingers, mEyes, pk, startPeek };
 </script>
 </body>
 </html>
