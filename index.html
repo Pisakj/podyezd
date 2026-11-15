@@ -77,6 +77,9 @@ const FOG_DENSITY = param('fog', 0.2);   // how soon things vanish in the dark
 const TORCH = param('torch', 6);         // torch brightness
 const RATE = param('rate', 35);          // seconds of standing for the follower to come all the way
 const SPEED = param('speed', 1.6);       // walking speed, m/s; stairs are slower in proportion
+// one empty floor has the announced darkness (?dark=2 or 4 fixes which), the other has the flickering lamp
+const DARK_FLOOR = [2, 4].includes(param('dark', 0)) ? param('dark', 0) : (Math.random() < 0.5 ? 2 : 4);
+const FLICKER_FLOOR = 6 - DARK_FLOOR;
 
 // ---------- renderer ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -360,6 +363,7 @@ function sheetFor(n) {
   const crossed = new Set(); let notes = [];
   for (const k of PUZZLE_FLOORS) if (k <= n) CROSS[puzzleOf(k)].forEach(i => crossed.add(i));
   if (isPuzzleFloor(n)) { notes = NOTES[puzzleOf(n)].slice(); if (sheetFlip[n]) notes.reverse(); }
+  if (n === DARK_FLOOR) notes = ['На этом этаже свет гаснет на 20 секунд. Стойте.'];
   if (n === TOP) { for (let i = 0; i < 6; i++) crossed.add(i); notes = ['Он подождёт.']; }
   return { crossed, notes };
 }
@@ -417,7 +421,7 @@ for (let n = 0; n < FLOORS; n++) {
   interact.push({ pos: new THREE.Vector3(-HALL_W + 0.05, y0 + 1.1, -0.5), label: 'вызвать лифт', act: () => { sfxClunk(); say('Кнопка проваливается и не возвращается.'); } });
 
   // lamp in hall
-  addLamp(-0.6, y0 + 2.5, -1.3, n === 0 ? 5 : rand(1.8, 2.8), n === 2 ? 'flicker' : 'normal');
+  addLamp(-0.6, y0 + 2.5, -1.3, n === 0 ? 5 : rand(1.8, 2.8), n === FLICKER_FLOOR ? 'flicker' : 'normal');
 
   if (n === 0) {
     // entrance door, mailboxes, rules, lift sign, way down is walled off
@@ -915,10 +919,33 @@ function updateCatch(dt) {
   return C.t < 0.12 ? 1 - C.t / 0.12 : C.t > 3.3 ? (C.t - 3.3) / 0.3 : 0;
 }
 const NEAR = 0.88;   // this close, everything it makes goes silent
+// The announced darkness. The sheet on one empty floor says the light will go out for 20 seconds, and it does:
+// 15-25 s after the player steps onto that floor every lamp and the torch die for exactly 20 s. The steps come up
+// to 0.8 and stop. Then the light is back and nothing has happened. Once per run, and there is no catch during it.
+const D = { t: -1, armed: false, timer: 0, done: false, c0: 0 };
+function updateDark(dt) {
+  if (D.done) return;
+  const here = Math.round(P.y / H) === DARK_FLOOR;
+  if (D.t < 0) {
+    if (!D.armed) { if (Math.abs(P.y - DARK_FLOOR * H) < 0.05) { D.armed = true; D.timer = rand(15, 25); } return; }
+    if (!here || C.t >= 0 || E.t >= 0) return;   // the clock only runs while the player is on that floor
+    D.timer -= dt;
+    if (D.timer <= 0) { D.t = 0; D.c0 = F.c; F.hush = false; F.done = false; F.next = 1.5; tick(1700, 0.03); }
+    return;
+  }
+  D.t += dt;
+  if (D.t >= 20) { D.t = -1; D.done = true; F.c = D.c0; F.still = 0; tick(1300, 0.03); }
+}
 function updateFollower(dt, moving) {
   // nothing at all happens until the player has reached the first floor
   if (!F.active) { if (P.y >= H - 0.05) F.active = true; else return; }
   if (C.t >= 0) return;
+  if (D.t >= 0) {   // in the announced darkness it walks up to 0.8 whatever the player does, then stands silent
+    const coming = F.c < 0.8;
+    if (coming) { F.c = Math.min(0.8, F.c + dt * Math.max(0.05, 0.8 - D.c0) / 13); F.next -= dt; if (F.next <= 0) { followerStep(F.c); F.next = lerp(0.56, 1.05, F.c) + rand(0, 0.06); } }
+    A.drone.gain.setTargetAtTime(coming ? 0.2 * Math.max(0, F.c - 0.45) : 0, A.ctx.currentTime, coming ? 0.4 : 0.03);
+    return;
+  }
   F.extraCd -= dt;
   const minC = 0.08 * Math.max(0, Math.floor((P.y + 0.05) / H));   // the higher you climb, the less you can shake it off
   if (moving) {
@@ -979,7 +1006,7 @@ function updateWorld(dt) {
   for (const l of lamps) {
     let f = 1;
     const dark = F.active && F.c > 0.12 && l.light.position.y - 2.4 < fy + 0.4;
-    if (dark !== !!l.dark) { l.dark = dark; if (l.kind !== 'dead') tick(dark ? 1700 : 1300, 0.02); }
+    if (dark !== !!l.dark) { l.dark = dark; if (l.kind !== 'dead' && D.t < 0) tick(dark ? 1700 : 1300, 0.02); }
     if (l.kind === 'dead') f = 0;
     else if (l.kind === 'flicker') {
       l.t -= dt;
@@ -987,7 +1014,7 @@ function updateWorld(dt) {
       f = l.on ? rand(0.85, 1) : 0.04;
     }
     if (l.off > 0) { l.off -= dt; f = 0; if (l.off <= 0) tick(1500, 0.03); }
-    if (dark || blinkT > 0) f = 0;
+    if (dark || blinkT > 0 || D.t >= 0) f = 0;
     f *= 1 - 0.45 * F.c * F.c;
     if (F.arrived && Math.abs(l.light.position.y - P.y - 2.4) < 1.2) f *= rand(0.35, 0.6);
     l.light.intensity = l.base * f;
@@ -1090,9 +1117,10 @@ function frame() {
     // the torch cuts out by itself now and then
     if (F.active) { torchT -= dt; if (torchT <= 0 && !eventsOff()) { torchOff = rand(0.3, 1.5); torchT = rand(40, 90); } }
     if (torchOff > 0) torchOff -= dt;
-    torch.intensity = blinkT > 0 || torchOff > 0 ? 0 : torchBase * tf;
+    torch.intensity = blinkT > 0 || torchOff > 0 || D.t >= 0 ? 0 : torchBase * tf;
     torch.target.position.set(Math.sin(T * 0.9) * 0.025, -0.06 + Math.sin(P.bob * 4.6) * 0.015, -1);
     post.uniforms.time.value = T; post.uniforms.fear.value = F.c;
+    updateDark(dt);
     updateFollower(dt, E.t >= 0 ? false : moving);
     updateBack(dt); updateFinale(dt); post.uniforms.fade.value = E.fade * updateCatch(dt);
     updateWorld(dt);
@@ -1107,7 +1135,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime };
+window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch };
 </script>
 </body>
 </html>
