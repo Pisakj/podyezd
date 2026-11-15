@@ -66,6 +66,13 @@ const EYE = 1.62;
 const rand = (a, b) => a + Math.random() * (b - a);
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// tuning from the URL: ?fog=0.2&torch=6&rate=35&speed=1.6 (also ?order=switch,back,loop)
+const Q = new URLSearchParams(location.search);
+const param = (k, d) => { const v = parseFloat(Q.get(k)); return Number.isFinite(v) ? v : d; };
+const FOG_DENSITY = param('fog', 0.2);   // how soon things vanish in the dark
+const TORCH = param('torch', 6);         // torch brightness
+const RATE = param('rate', 35);          // seconds of standing for the follower to come all the way
+const SPEED = param('speed', 1.6);       // walking speed, m/s; stairs are slower in proportion
 
 // ---------- renderer ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -75,7 +82,7 @@ document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 const FOG = 0x040607;
 scene.background = new THREE.Color(FOG);
-scene.fog = new THREE.FogExp2(FOG, 0.2);
+scene.fog = new THREE.FogExp2(FOG, FOG_DENSITY);
 const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 40);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
@@ -118,7 +125,6 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // the player's phone torch: the only light that casts shadows
-const TORCH = 6;
 const torch = new THREE.SpotLight(0xdde6ff, TORCH, 0, 0.5, 0.75, 1.7);
 torch.position.set(0.24, -0.2, 0.1); camera.add(torch); camera.add(torch.target); torch.target.position.set(0, -0.06, -1);
 torch.castShadow = true; torch.shadow.mapSize.set(1024, 1024); torch.shadow.camera.near = 0.1; torch.shadow.camera.far = 14;
@@ -263,7 +269,7 @@ function graffiti(x, y, z, ry) {
 
 // ---------- puzzles ----------
 // which puzzle sits on floors 1..3. Random per run; ?order=switch,back,loop fixes it for testing
-const qOrder = new URLSearchParams(location.search).get('order');
+const qOrder = Q.get('order');
 const ORDER = qOrder ? qOrder.split(',') : (() => { const a = ['switch', 'back', 'loop']; for (let i = 2; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; })();
 const puzzleOf = n => ORDER[n - 1];
 const gates = {};
@@ -859,7 +865,7 @@ function updateListener() {
 
 // ---------- the follower ----------
 // c = closeness 0..1. Grows while the player stands, shrinks while the player walks.
-const F = { c: 0, still: 0, next: 0, arrived: false, active: false, extraCd: 20, rate: 35, pace: 1, quiet: 0, mode: 'below', first: true, single: false, hush: false, hushT: 0, done: false, pos: new THREE.Vector3() };
+const F = { c: 0, still: 0, next: 0, arrived: false, active: false, extraCd: 20, rate: RATE, pace: 1, quiet: 0, mode: 'below', first: true, single: false, hush: false, hushT: 0, done: false, pos: new THREE.Vector3() };
 function followerPos(gap) {   // a point on the stairs `gap` metres of height below the player
   const y = P.y - gap;
   if (y < 0) return F.pos.set(-1.9, 0.2, -HALL_D - 1 + y * 1.5);   // still outside the front door
@@ -1053,7 +1059,7 @@ function frame() {
       const st = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
       if (fw || st) {
         const onStairs = P.z > 0 && P.z < RUN;
-        const sp = (onStairs ? 1.3 : 1.6) * dt / Math.hypot(fw, st);
+        const sp = (onStairs ? SPEED * 0.8125 : SPEED) * dt / Math.hypot(fw, st);
         const sx = Math.sin(P.yaw), cz = Math.cos(P.yaw);
         const dx = (-sx * fw + cz * st) * sp, dz = (-cz * fw - sx * st) * sp;
         if (free(P.x + dx, P.z, P.y)) P.x += dx;
