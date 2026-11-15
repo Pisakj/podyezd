@@ -873,7 +873,7 @@ function updateListener() {
 
 // ---------- the follower ----------
 // c = closeness 0..1. Grows while the player stands, shrinks while the player walks.
-const F = { c: 0, still: 0, next: 0, arrived: false, active: false, extraCd: 20, rate: 16, pace: 1, quiet: 0, mode: 'below', pos: new THREE.Vector3() };
+const F = { c: 0, still: 0, next: 0, arrived: false, active: false, extraCd: 20, rate: 16, pace: 1, quiet: 0, mode: 'below', first: true, single: false, pos: new THREE.Vector3() };
 function followerPos(gap) {   // a point on the stairs `gap` metres of height below the player
   const y = P.y - gap;
   if (y < 0) return F.pos.set(-1.9, 0.2, -HALL_D - 1 + y * 1.5);   // still outside the front door
@@ -919,21 +919,24 @@ function updateCatch(dt) {
   return C.t < 0.12 ? 1 - C.t / 0.12 : C.t > 3.3 ? (C.t - 3.3) / 0.3 : 0;
 }
 function updateFollower(dt, moving) {
-  if (!F.active) { if (P.y > 0.5 || T > 25) F.active = true; else return; }
+  // nothing at all happens until the player has reached the first floor
+  if (!F.active) { if (P.y >= H - 0.05) F.active = true; else return; }
   if (C.t >= 0) return;
   F.extraCd -= dt;
   if (moving) {
     // sometimes it does not stop the moment you start walking
     if (F.still > 0.7 && F.c > 0.25 && F.c < 1 && Math.random() < 0.35) { const c = F.c; setTimeout(() => running && followerStep(c), 380); setTimeout(() => running && followerStep(c * 0.85), 1000); }
-    F.still = 0; F.c = Math.max(0, F.c - dt / 7); F.arrived = false; F.next = 0.3;
+    F.still = 0; F.c = Math.max(0, F.c - dt / 7); F.arrived = false; F.next = 0.3; F.single = false;
   } else {
     const was = F.still; F.still += dt;
-    if (was <= 0.7 && F.still > 0.7) {   // each stop it behaves a little differently
+    if (was <= 0.7 && F.still > 0.7 && F.first) {   // the very first sign of it: one step far below, then nothing for the rest of this stop
+      F.first = false; F.single = true; followerStep(0.2);
+    } else if (was <= 0.7 && F.still > 0.7) {   // each stop it behaves a little differently
       const r = Math.random();
       F.mode = r < 0.6 ? 'below' : r < 0.85 ? 'silent' : 'above';
       F.quiet = F.mode === 'silent' ? rand(3, 6) : 0; F.pace = rand(0.8, 1.25);
     }
-    if (F.still > 0.7) {
+    if (F.still > 0.7 && !F.single) {
       F.c = Math.min(1, F.c + dt * F.pace / (F.rate * (P.y < 0.5 ? 2 : 1)));
       if (F.c < 1) {
         if (F.quiet > 0) F.quiet -= dt;
@@ -956,7 +959,8 @@ let blackoutT = rand(25, 50), farT = rand(40, 90), eventCd = 8;
 const doorState = { af: 0, lf: 0, done: {} };
 function pickDoor(n) { const ds = doors.filter(d => d.floor === n && !d.own && d.ajar === 0 && !d.kind); return ds[Math.floor(Math.random() * ds.length)]; }
 function updateWorld(dt) {
-  blackoutT -= dt; blinkT -= dt;
+  blinkT -= dt;
+  if (F.active) { blackoutT -= dt; farT -= dt; }   // the ground floor stays uneventful
   if (blackoutT <= 0) {
     blackoutT = rand(25, 70);
     let best = null, bd = 1e9;
@@ -1022,7 +1026,6 @@ function updateWorld(dt) {
     if (lift.t > 6) { lift.state = 2; lift.strip.visible = false; lift.light.intensity = 0; }
   }
   // distant life of the house
-  farT -= dt;
   if (farT <= 0) {
     farT = rand(40, 90);
     const pos = new THREE.Vector3(rand(-3, 2), P.y + rand(4, 9), rand(-3, 3));
