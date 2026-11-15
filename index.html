@@ -53,7 +53,11 @@ import * as THREE from 'three';
 
 // ---------- constants ----------
 const H = 3;            // floor height
-const FLOORS = 5;       // 0 = lobby, 1..3 = puzzle floors, 4 = home
+const FLOORS = 7;       // 0 = lobby, then puzzle floors (1, 3, 5) alternate with empty floors (2, 4), 6 = home
+const TOP = FLOORS - 1;
+const isPuzzleFloor = n => n % 2 === 1 && n < TOP;
+const isEmptyFloor = n => n >= 2 && n % 2 === 0 && n < TOP;   // nothing here but a lamp and the stairs
+const PUZZLE_FLOORS = [1, 3, 5];
 const RUN = 2.52;       // horizontal length of a flight
 const STEPS = 9, RISE = 1.5 / STEPS, TREAD = RUN / STEPS;
 const SW = 3.0;         // stair shaft width (x: 0..SW)
@@ -247,7 +251,7 @@ function buildDoor(x, y, z, ry, m, number, floor) {
   box(0.9, 2.05, 0.07, 0.45, 1.025, 0, m, leaf);
   box(0.03, 0.12, 0.05, 0.81, 1.0, 0.04, mMetal, leaf);
   if (number == null) return g;
-  const lit = Math.random() < 0.6;   // light is on inside
+  const lit = !isEmptyFloor(floor) && Math.random() < 0.6;   // light is on inside
   const peep = new THREE.Mesh(new THREE.CircleGeometry(0.02, 10), new THREE.MeshBasicMaterial({ color: lit ? 0xffb060 : 0x101214, fog: false }));
   peep.position.set(0.45, 1.5, 0.037); leaf.add(peep);
   const p = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.09), mat({ map: labelTex(String(number), { bg: '#b9a878', font: 'bold 84px Arial' }) }));
@@ -271,7 +275,7 @@ function graffiti(x, y, z, ry) {
 // which puzzle sits on floors 1..3. Random per run; ?order=switch,back,loop fixes it for testing
 const qOrder = Q.get('order');
 const ORDER = qOrder ? qOrder.split(',') : (() => { const a = ['switch', 'back', 'loop']; for (let i = 2; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; })();
-const puzzleOf = n => ORDER[n - 1];
+const puzzleOf = n => isPuzzleFloor(n) ? ORDER[(n - 1) / 2] : undefined;
 const gates = {};
 const mGate = mat({ color: 0x2b2420 });
 function buildGate(n, hint) {   // barred door across the flight up
@@ -354,12 +358,12 @@ const NOTES = {
 };
 function sheetFor(n) {
   const crossed = new Set(); let notes = [];
-  for (let k = 1; k <= Math.min(n, 3); k++) CROSS[puzzleOf(k)].forEach(i => crossed.add(i));
-  if (n >= 1 && n <= 3) { notes = NOTES[puzzleOf(n)].slice(); if (sheetFlip[n]) notes.reverse(); }
-  if (n === 4) { for (let i = 0; i < 6; i++) crossed.add(i); notes = ['Он подождёт.']; }
+  for (const k of PUZZLE_FLOORS) if (k <= n) CROSS[puzzleOf(k)].forEach(i => crossed.add(i));
+  if (isPuzzleFloor(n)) { notes = NOTES[puzzleOf(n)].slice(); if (sheetFlip[n]) notes.reverse(); }
+  if (n === TOP) { for (let i = 0; i < 6; i++) crossed.add(i); notes = ['Он подождёт.']; }
   return { crossed, notes };
 }
-const sheetFlip = [0, 1, 2, 3, 4].map(() => Math.random() < 0.5);
+const sheetFlip = Array.from({ length: FLOORS }, () => Math.random() < 0.5);
 // finale: 10 seconds at your own door
 const E = { t: -1, ended: false, fade: 1 };
 function startFinale() {
@@ -492,7 +496,7 @@ box(HALL_W + SW + 0.2, 0.2, HALL_D + LAND_END + 0.2, (SW - HALL_W) / 2, FLOORS *
 const DOOR_SND = { clock: { vol: 0.22, lp: 1200 }, snore: { vol: 0.28, lp: 450 }, talk: { vol: 0.2, lp: 500, shy: true, live: [6, 18, 5, 20] },
   radio: { vol: 0.18, lp: 800, live: [15, 40, 5, 15] }, drip: { vol: 0.25, lp: 1400 }, cough: { vol: 0.25, lp: 600, gap: [10, 30] } };
 const DOOR_SND_COUNT = 3;
-{ const ds = doors.filter(d => !d.own).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, DOOR_SND_COUNT).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
+{ const ds = doors.filter(d => !d.own && !isEmptyFloor(d.floor)).sort(() => Math.random() - 0.5); Object.keys(DOOR_SND).sort(() => Math.random() - 0.5).slice(0, DOOR_SND_COUNT).forEach((nm, i) => { if (ds[i]) ds[i].snd = nm; }); }
 world.traverse(m => { if (m.isMesh && m.material.isMeshLambertMaterial !== false && !m.material.isMeshBasicMaterial) { m.castShadow = !m.material.transparent; m.receiveShadow = true; } });
 
 // The edge of sight: fingers on a rail that let go as you turn to them. Once per run at most, and not before the second floor.
@@ -501,7 +505,7 @@ const fingers = new THREE.Group(); fingers.visible = false; world.add(fingers);
 const G = { cd: 30, on: false, used: false, k: 0, out: false, life: 0, show: new THREE.Vector3(), hide: new THREE.Vector3() };
 function edgeSpots() {   // [x, y, z, hide dx, dy, dz]
   const n = Math.round(P.y / H), onFloor = Math.abs(P.y - n * H) < 0.05, y0 = n * H, fl = Math.floor(P.y / H), list = [];
-  if (onFloor && P.z < -0.3 && n <= FLOORS - 2) list.push([MIDX + rand(-0.2, 0.2), y0 + 2.445, RUN - 0.002, 0, 0.06, 0.09]);                         // over the rail one landing up
+  if (onFloor && P.z < -0.3 && n <= FLOORS - 2 && !isEmptyFloor(n)) list.push([MIDX + rand(-0.2, 0.2), y0 + 2.445, RUN - 0.002, 0, 0.06, 0.09]);                         // over the rail one landing up
   if (P.x < MIDX && P.z > 0.6 && P.z < 2.2 && fl <= FLOORS - 2) list.push([MIDX + rand(-0.2, 0.2), (fl + 1) * H + 0.945, 0.002, 0, 0.06, -0.09]);   // on the rail of the hall you are climbing to
   return list;
 }
@@ -530,12 +534,12 @@ function updatePeeker(dt) {
 const pk = { on: false, d: null, t: 0, yaw0: 0 };
 const pc = document.getElementById('peek'), pg = pc.getContext('2d');
 const HINTS = { switch: ['ВЫКЛЮЧАТЕЛЬ', 'НЕ ПРО СВЕТ'], back: ['ВСТАНЬ СПИНОЙ', 'К РЕШЁТКЕ'], loop: ['ВВЕРХ —', 'ЭТО ВНИЗ'] };
-const HINT_AFTER = 90, floorTime = { 1: 0, 2: 0, 3: 0 };   // seconds spent on each puzzle floor while it is unsolved
+const HINT_AFTER = 90, floorTime = { 1: 0, 3: 0, 5: 0 };   // seconds spent on each puzzle floor while it is unsolved
 function solved(n) { const p = puzzleOf(n); return p === 'switch' ? S.solved : p === 'back' ? B.solved : L.solved; }
 const STRANGE = ['head', 'chair', 'block', 'fifteen'].sort(() => Math.random() - 0.5);
 function startPeek(d) {
   // the gap shows the answer only to someone who has been stuck on this floor for a while; otherwise something odd
-  const fl = d.floor, stuck = fl >= 1 && fl <= 3 && !solved(fl) && floorTime[fl] >= HINT_AFTER;
+  const fl = d.floor, stuck = isPuzzleFloor(fl) && !solved(fl) && floorTime[fl] >= HINT_AFTER;
   if (stuck) d.kind = 'hint'; else if (!d.kind || d.kind === 'hint') d.kind = STRANGE.pop() || 'chair';
   pk.on = true; pk.d = d; pk.t = 0; pk.yaw0 = P.yaw;
   pc.width = Math.round(innerWidth / 2.5); pc.height = Math.round(innerHeight / 2.5); pc.style.display = 'block';
@@ -572,7 +576,7 @@ function drawPeek(dt) {
     }
   }
   if (kind === 'hint' || kind === 'fifteen') {
-    const lines = kind === 'hint' ? HINTS[puzzleOf(pk.d.floor)] : ['ОН УЖЕ', 'В 15-й'];
+    const lines = kind === 'hint' ? HINTS[puzzleOf(pk.d.floor)] : ['ОН УЖЕ', `В ${TOP * 3 + 3}-й`];
     g.fillStyle = 'rgba(196,186,160,.8)'; g.font = `bold ${Math.round(fh * 0.115)}px "Marker Felt", "Comic Sans MS", cursive`; g.textAlign = 'center';
     lines.forEach((l, i) => g.fillText(l, 0, -fh * 0.74 + i * fh * 0.16, fw * 1.9));
   }
@@ -587,7 +591,7 @@ function drawPeek(dt) {
 }
 
 // the lift that does not work
-const lift = { floor: 1 + Math.floor(Math.random() * 3), state: 0, t: 0 };
+const lift = { floor: PUZZLE_FLOORS[Math.floor(Math.random() * 3)], state: 0, t: 0 };
 lift.strip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 1, 0.02), new THREE.MeshBasicMaterial({ color: 0xffdf9a, fog: false }));
 lift.strip.position.set(-HALL_W + 0.105, 0, -1.3); lift.strip.visible = false; world.add(lift.strip);
 lift.light = new THREE.PointLight(0xffd9a0, 0, 4, 2); lift.light.position.set(-HALL_W + 0.5, 0, -1.3); world.add(lift.light);
@@ -799,7 +803,7 @@ function updateDoorSounds(dt) {
   for (const d of doors) {
     const dist = camera.position.distanceTo(d.pos);
     // stand in front of a door for a while and someone inside walks up to it
-    if (!d.own && !d.came) {
+    if (!d.own && !d.came && !isEmptyFloor(d.floor)) {
       const facing = dist < 1.7 && P.speed < 0.4 && vTo.copy(d.pos).sub(camera.position).normalize().dot(vDir) > 0.6;
       d.linger = facing ? (d.linger || 0) + dt : 0;
       if (d.linger > 2.5) {
@@ -916,7 +920,7 @@ function updateFollower(dt, moving) {
   if (!F.active) { if (P.y >= H - 0.05) F.active = true; else return; }
   if (C.t >= 0) return;
   F.extraCd -= dt;
-  const minC = 0.12 * Math.max(0, Math.floor((P.y + 0.05) / H));   // the higher you climb, the less you can shake it off
+  const minC = 0.08 * Math.max(0, Math.floor((P.y + 0.05) / H));   // the higher you climb, the less you can shake it off
   if (moving) {
     // sometimes it does not stop the moment you start walking
     if (F.still > 0.7 && F.c > 0.25 && !F.hush && Math.random() < 0.35) { const c = F.c; setTimeout(() => running && followerStep(c), 380); setTimeout(() => running && followerStep(c * 0.85), 1000); }
@@ -957,12 +961,14 @@ function updateFollower(dt, moving) {
 
 // ---------- world randomness ----------
 let blackoutT = rand(25, 50), farT = rand(40, 90), eventCd = 8;
+function onFloorOf(test) { const n = Math.round(P.y / H); return Math.abs(P.y - n * H) < 0.75 && test(n); }   // on a floor of that kind, not on the stairs between
+const eventsOff = () => onFloorOf(isEmptyFloor);
 const doorState = { af: 0, lf: 0, done: {} };
 function pickDoor(n) { const ds = doors.filter(d => d.floor === n && !d.own && d.ajar === 0 && !d.kind); return ds[Math.floor(Math.random() * ds.length)]; }
 function updateWorld(dt) {
   blinkT -= dt;
   if (F.active) { blackoutT -= dt; farT -= dt; }   // the ground floor stays uneventful
-  if (blackoutT <= 0) {
+  if (blackoutT <= 0 && !eventsOff()) {
     blackoutT = rand(25, 70);
     let best = null, bd = 1e9;
     for (const l of lamps) if (l.kind === 'normal' && l.off <= 0) { const d = Math.abs(l.light.position.y - (P.y + 2.3)) + Math.random(); if (d < bd) { bd = d; best = l; } }
@@ -992,7 +998,7 @@ function updateWorld(dt) {
   // doors: a lit peephole may go dark when you look into it; a handle may move behind your back
   eventCd -= dt; camera.getWorldDirection(vDir);
   for (const d of doors) {
-    vTo.copy(d.pos).sub(camera.position); const dist = vTo.length(); if (dist > 1.7) continue;
+    vTo.copy(d.pos).sub(camera.position); const dist = vTo.length(); if (dist > 1.7 || isEmptyFloor(d.floor)) continue;
     const dot = vTo.normalize().dot(vDir);
     if (d.lit && !d.peeped && dist < 1.3 && dot > 0.92) { d.peeped = true; if (Math.random() < 0.3) setTimeout(() => { d.peep.material.color.set(0x030303); creak(d.pos); }, 600); }
     if (!d.knocked && dot < -0.3 && eventCd <= 0) { d.knocked = true; if (Math.random() < 0.35) { eventCd = 45; rattle(d.pos); } }
@@ -1000,16 +1006,16 @@ function updateWorld(dt) {
   // doors: on every floor one already stands ajar when you arrive, one may open behind you as you leave. Look into the gap
   { const af = Math.floor((P.y + 1.5) / H);
     if (af !== doorState.af) {
-      if (af > doorState.af && af >= 1 && af <= 3 && !doorState.done[af]) { const d = pickDoor(af); if (d) { doorState.done[af] = true; d.ajar = 0.5; d.leaf.rotation.y = 0.5; } }
+      if (af > doorState.af && isPuzzleFloor(af) && !doorState.done[af]) { const d = pickDoor(af); if (d) { doorState.done[af] = true; d.ajar = 0.5; d.leaf.rotation.y = 0.5; } }
       doorState.af = af;
     }
     const lf = Math.floor((P.y - 0.9) / H);   // climbed most of the way off a floor
     if (lf !== doorState.lf) {
-      if (lf > doorState.lf && lf >= 1 && lf <= 3 && P.x > MIDX && Math.random() < 0.45) { const d = pickDoor(lf); if (d) { d.ajar = 0.6; creak(d.pos); } }
+      if (lf > doorState.lf && isPuzzleFloor(lf) && P.x > MIDX && Math.random() < 0.45) { const d = pickDoor(lf); if (d) { d.ajar = 0.6; creak(d.pos); } }
       doorState.lf = lf;
     }
     const cf = Math.round(P.y / H);
-    if (cf >= 1 && cf <= 3 && !solved(cf)) {
+    if (isPuzzleFloor(cf) && !solved(cf)) {
       const was = floorTime[cf]; floorTime[cf] += dt;
       if (was < HINT_AFTER && floorTime[cf] >= HINT_AFTER && !doors.some(d => d.floor === cf && d.ajar > 0)) {   // stuck: a door opens, the answer is inside
         const ds = doors.filter(d => d.floor === cf && !d.own); const d = ds[Math.floor(Math.random() * ds.length)];
@@ -1035,7 +1041,7 @@ function updateWorld(dt) {
     if (lift.t > 6) { lift.state = 2; lift.strip.visible = false; lift.light.intensity = 0; }
   }
   // distant life of the house
-  if (farT <= 0) {
+  if (farT <= 0 && !eventsOff()) {
     farT = rand(40, 90);
     const pos = new THREE.Vector3(rand(-3, 2), P.y + rand(4, 9), rand(-3, 3));
     const r = Math.random();
@@ -1076,13 +1082,13 @@ function frame() {
     const stride = onStairs ? TREAD * 1.05 : 0.68;
     if (P.stepAcc > stride) {
       P.stepAcc = 0; selfStep(onStairs);
-      if (F.active && F.extraCd <= 0 && Math.random() < 0.05) { F.extraCd = rand(25, 60); setTimeout(() => running && followerStep(0.55, true), 260); }
+      if (F.active && F.extraCd <= 0 && !eventsOff() && Math.random() < 0.05) { F.extraCd = rand(25, 60); setTimeout(() => running && followerStep(0.55, true), 260); }
     }
     camera.position.set(P.x, P.y + EYE + Math.sin(P.bob / stride * Math.PI) * 0.022, P.z);
     camera.rotation.set(P.pitch, P.yaw, 0);
     let tf = 1 - 0.6 * F.c * F.c; if (F.arrived) tf *= Math.random() < 0.15 ? 0.1 : 0.45;
     // the torch cuts out by itself now and then
-    if (F.active) { torchT -= dt; if (torchT <= 0) { torchOff = rand(0.3, 1.5); torchT = rand(40, 90); } }
+    if (F.active) { torchT -= dt; if (torchT <= 0 && !eventsOff()) { torchOff = rand(0.3, 1.5); torchT = rand(40, 90); } }
     if (torchOff > 0) torchOff -= dt;
     torch.intensity = blinkT > 0 || torchOff > 0 ? 0 : torchBase * tf;
     torch.target.position.set(Math.sin(T * 0.9) * 0.025, -0.06 + Math.sin(P.bob * 4.6) * 0.015, -1);
