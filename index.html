@@ -80,6 +80,8 @@ const SPEED = param('speed', 1.6);       // walking speed, m/s; stairs are slowe
 // one empty floor has the announced darkness (?dark=2 or 4 fixes which), the other has the flickering lamp
 const DARK_FLOOR = [2, 4].includes(param('dark', 0)) ? param('dark', 0) : (Math.random() < 0.5 ? 2 : 4);
 const FLICKER_FLOOR = 6 - DARK_FLOOR;
+// ?show=steps,window,door makes the quiet visual events happen at once, for checking them
+const SHOW = new Set((Q.get('show') || '').split(',').filter(Boolean));
 
 // ---------- renderer ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -1005,6 +1007,48 @@ function updateShepard(dt) {
   });
 }
 
+// ---------- quiet visual events ----------
+// No sound, nothing sudden, and nothing ever appears or changes where the player is looking:
+// every change waits until the spot is off screen.
+function unseen(x, y, z) { camera.getWorldDirection(vDir); return vTo.set(x, y, z).sub(camera.position).normalize().dot(vDir) < 0.4; }
+
+// Wet footprints on the stairs the player has already climbed. The chain stays about a flight and a half behind,
+// left and right in turn. Where the player stood for a while it ends in a pair, side by side, toes pointing up at them.
+// A print dries after a minute. They are dark and flat: only light, in practice the torch, shows them.
+const TRAIL_GAP = (SHOW.has('steps') ? 0.5 : param('trail', 1.5)) * 1.5;   // flights behind the player, as metres of height
+const TRAIL_STAND = SHOW.has('steps') ? 1 : 3, TRAIL_DRY = 60;
+const mPrint = new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
+  map: tex(64, 128, (g) => { g.fillStyle = '#0b0d10'; g.beginPath(); g.ellipse(32, 46, 18, 36, 0, 0, 7); g.fill(); g.beginPath(); g.ellipse(31, 104, 13, 19, 0, 0, 7); g.fill(); }) });
+const printGeo = new THREE.PlaneGeometry(0.12, 0.27);
+const trail = { next: SHOW.has('steps') ? 0 : 2 * STEPS, side: 1, still: 0, paired: false, list: [], pool: [] };
+function stepSpot(i) {   // step number i counted from the lobby, 18 to a floor -> where a foot lands and which way it points
+  const n = Math.floor(i / (2 * STEPS)), k = i % (2 * STEPS);
+  if (k < STEPS) return { x: AXC, y: n * H + (k + 1) * RISE, z: (k + 0.5) * TREAD, yaw: Math.PI };
+  const j = 2 * STEPS - 1 - k; return { x: BXC, y: (n + 1) * H - j * RISE, z: (j + 0.5) * TREAD, yaw: 0 };
+}
+function putPrint(i, dx) {
+  const sp = stepSpot(i);
+  if (!unseen(sp.x + dx, sp.y, sp.z)) return false;
+  const m = trail.pool.pop() || new THREE.Mesh(printGeo, mPrint);
+  m.rotation.order = 'YXZ'; m.rotation.set(-Math.PI / 2, sp.yaw, 0); m.position.set(sp.x + dx, sp.y + 0.004, sp.z); m.visible = true;
+  if (!m.parent) world.add(m);
+  trail.list.push({ m, t: T, i, dx });
+  return true;
+}
+function updateTrail(dt, moving) {
+  if (!F.active && !SHOW.has('steps')) return;
+  trail.still = moving ? 0 : trail.still + dt; if (moving) trail.paired = false;
+  const head = Math.min(Math.floor((P.y - TRAIL_GAP) / RISE), TOP * 2 * STEPS - 1);
+  for (let n = 0; n < 3 && trail.next <= head; n++) { if (!putPrint(trail.next, trail.side * 0.1)) break; trail.side = -trail.side; trail.next++; }
+  // it stopped when the player stopped: the last print gets its other foot beside it
+  const last = trail.list[trail.list.length - 1];
+  if (trail.still > TRAIL_STAND && !trail.paired && last && last.i === trail.next - 1 && trail.next > head) { if (putPrint(last.i, -last.dx)) trail.paired = true; }
+  for (let k = trail.list.length - 1; k >= 0; k--) {   // dry out, but never while watched
+    const p = trail.list[k];
+    if (T - p.t > TRAIL_DRY && unseen(p.m.position.x, p.m.position.y, p.m.position.z)) { p.m.visible = false; trail.pool.push(p.m); trail.list.splice(k, 1); }
+  }
+}
+
 // ---------- world randomness ----------
 let blackoutT = rand(25, 50), farT = rand(40, 90);
 function onFloorOf(test) { const n = Math.round(P.y / H); return Math.abs(P.y - n * H) < 0.75 && test(n); }   // on a floor of that kind, not on the stairs between
@@ -1112,7 +1156,7 @@ function frame() {
     torch.intensity = blinkT > 0 || torchOff > 0 || D.t >= 0 ? 0 : torchBase * tf;
     torch.target.position.set(Math.sin(T * 0.9) * 0.025, -0.06 + Math.sin(P.bob * 4.6) * 0.015, -1);
     post.uniforms.time.value = T; post.uniforms.fear.value = F.c;
-    updateDark(dt);
+    updateDark(dt); updateTrail(dt, moving);
     updateFollower(dt, E.t >= 0 ? false : moving);
     updateBack(dt); updateFinale(dt); post.uniforms.fade.value = E.fade * updateCatch(dt);
     updateWorld(dt);
@@ -1127,7 +1171,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch };
+window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail };
 </script>
 </body>
 </html>
