@@ -524,9 +524,13 @@ function updatePeeker(dt) {
 const pk = { on: false, d: null, t: 0, yaw0: 0 };
 const pc = document.getElementById('peek'), pg = pc.getContext('2d');
 const HINTS = { switch: ['ВЫКЛЮЧАТЕЛЬ', 'НЕ ПРО СВЕТ'], back: ['ВСТАНЬ СПИНОЙ', 'К РЕШЁТКЕ'], loop: ['ВВЕРХ —', 'ЭТО ВНИЗ'] };
+const HINT_AFTER = 90, floorTime = { 1: 0, 2: 0, 3: 0 };   // seconds spent on each puzzle floor while it is unsolved
+function solved(n) { const p = puzzleOf(n); return p === 'switch' ? S.solved : p === 'back' ? B.solved : L.solved; }
 const STRANGE = ['head', 'chair', 'block', 'fifteen'].sort(() => Math.random() - 0.5);
 function startPeek(d) {
-  if (!d.kind) d.kind = d.wantHint ? 'hint' : (STRANGE.pop() || 'chair');
+  // the gap shows the answer only to someone who has been stuck on this floor for a while; otherwise something odd
+  const fl = d.floor, stuck = fl >= 1 && fl <= 3 && !solved(fl) && floorTime[fl] >= HINT_AFTER;
+  if (stuck) d.kind = 'hint'; else if (!d.kind || d.kind === 'hint') d.kind = STRANGE.pop() || 'chair';
   pk.on = true; pk.d = d; pk.t = 0; pk.yaw0 = P.yaw;
   pc.width = Math.round(innerWidth / 2.5); pc.height = Math.round(innerHeight / 2.5); pc.style.display = 'block';
 }
@@ -990,13 +994,21 @@ function updateWorld(dt) {
   // doors: on every floor one already stands ajar when you arrive, one may open behind you as you leave. Look into the gap
   { const af = Math.floor((P.y + 1.5) / H);
     if (af !== doorState.af) {
-      if (af > doorState.af && af >= 1 && af <= 3 && !doorState.done[af]) { const d = pickDoor(af); if (d) { doorState.done[af] = true; d.wantHint = Math.random() < 0.6; d.ajar = 0.5; d.leaf.rotation.y = 0.5; } }
+      if (af > doorState.af && af >= 1 && af <= 3 && !doorState.done[af]) { const d = pickDoor(af); if (d) { doorState.done[af] = true; d.ajar = 0.5; d.leaf.rotation.y = 0.5; } }
       doorState.af = af;
     }
     const lf = Math.floor((P.y - 0.9) / H);   // climbed most of the way off a floor
     if (lf !== doorState.lf) {
       if (lf > doorState.lf && lf >= 1 && lf <= 3 && P.x > MIDX && Math.random() < 0.45) { const d = pickDoor(lf); if (d) { d.ajar = 0.6; creak(d.pos); } }
       doorState.lf = lf;
+    }
+    const cf = Math.round(P.y / H);
+    if (cf >= 1 && cf <= 3 && !solved(cf)) {
+      const was = floorTime[cf]; floorTime[cf] += dt;
+      if (was < HINT_AFTER && floorTime[cf] >= HINT_AFTER && !doors.some(d => d.floor === cf && d.ajar > 0)) {   // stuck: a door opens, the answer is inside
+        const ds = doors.filter(d => d.floor === cf && !d.own); const d = ds[Math.floor(Math.random() * ds.length)];
+        if (d) { d.ajar = 0.5; creak(d.pos); }
+      }
     }
     for (const d of doors) {
       const a = d.leaf.rotation.y;
@@ -1083,7 +1095,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek };
+window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime };
 </script>
 </body>
 </html>
