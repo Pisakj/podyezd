@@ -60,7 +60,7 @@ Quiet visual events. They make no sound, nothing is sudden, and nothing appears 
 | Event | Where | What |
 |---|---|---|
 | Footprints (`updateTrail`) | stair treads only | Wet prints follow about 1.5 flights behind, left and right in turn. After the player has stood 3 s the chain ends in a pair side by side. A print dries after 60 s |
-| Window opposite (`updateYard`) | landing windows | Facade across the yard with one dimly lit window and a still dark shape in it, always level with the player. From level 4 the shape is larger |
+| Window opposite (`mYard`, `updateYard`) | landing windows | Each pane is a small ray tracer (a shader): it finds what the line from the eye through the glass hits outside: the yard ground, a street lamp 9 m out, the facade of the house opposite 22 m away, or the sky. So the view has real parallax against the frame. One window opposite is dimly lit with a still dark shape in it, always on the floor level with the player and on the player's line of sight through the window; it is moved only while the windows are off screen. From level 4 the shape is larger |
 | Door behind (`updateBehind`) | the empty floor without the darkness | Once per run the door by the stairs stands ajar after the player has climbed a flight |
 | Scribble (`updateGraffiti`) | one landing, never the first | "НЕ СТОЙ" reads "НЕ СТОЙ ЗДЕСЬ" after it has been looked at once |
 

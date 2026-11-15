@@ -407,37 +407,63 @@ function updateFinale(dt) {
 }
 
 // ---------- build ----------
-// Landing windows look across the yard at the house opposite: a dark facade, dark windows, and one dimly lit window
-// with a dark shape standing in it. That window is always level with the player (see updateYard).
+// Landing windows look out on a real yard, not a picture on the glass. Each pane is a small ray tracer: for every pixel
+// it follows the line from the eye through the glass and finds what that line hits outside: the ground of the yard,
+// a street lamp part of the way across, the facade of the house opposite 22 m away, or the sky above its roof. So the view
+// shifts against the window frame as the player moves, the way a far thing does.
+// The house opposite is a panel block of dark windows. One window is dimly lit and a dark shape stands in it (updateYard).
+const YARD = { depth: 22, bay: 3.0, x0: -30.5 };   // distance to the facade, width of one flat, where bay 0 starts
+const yardU = { litFloor: { value: 0 }, litBay: { value: 10 }, near: { value: 0 } };
+const mYard = new THREE.ShaderMaterial({
+  uniforms: yardU,
+  vertexShader: 'varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+  fragmentShader: `
+    uniform float litFloor, litBay, near; varying vec3 vW;
+    const float ZF = ${(LAND_END + YARD.depth).toFixed(2)}, FH = ${H.toFixed(1)}, BAY = ${YARD.bay.toFixed(1)}, X0 = ${YARD.x0.toFixed(1)}, ROOF = ${(FLOORS * H + 0.6).toFixed(1)};
+    const vec3 LAMP = vec3(-1.2, 5.4, ${(LAND_END + 9).toFixed(2)});
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main(){
+      vec3 o = cameraPosition, d = normalize(vW - o);
+      float tF = (ZF - o.z) / max(d.z, 1e-4), tG = d.y < 0.0 ? -o.y / d.y : 1e9, dist;
+      vec3 p = o + d * tF, col;
+      if (tG < tF) {                                   // the ground of the yard, with the pool of light under the lamp
+        vec3 g = o + d * tG; float dl = length(g.xz - LAMP.xz);
+        col = vec3(0.010, 0.011, 0.013) * (0.7 + 0.6 * hash(floor(g.xz * 1.5))) + vec3(0.11, 0.062, 0.022) * exp(-dl * dl / 9.0);
+        dist = tG;
+      } else if (p.y > ROOF) {                         // night sky above the roof
+        col = vec3(0.006, 0.009, 0.018); dist = 80.0;
+      } else {                                         // the facade
+        float fl = floor(p.y / FH), bay = floor((p.x - X0) / BAY);
+        vec2 q = vec2(mod(p.x - X0, BAY), mod(p.y, FH));
+        col = vec3(0.011, 0.0115, 0.013) * (0.75 + 0.5 * hash(vec2(bay, fl)));                 // concrete panels, each a little different
+        col *= 1.0 - 0.55 * min(step(q.x, 0.07) + step(q.y, 0.06), 1.0);                       // the seams between them
+        float lg = distance(p, LAMP); col += vec3(0.016, 0.009, 0.003) * exp(-lg * lg / 160.0);   // what the lamp throws on the wall
+        vec2 m = q - vec2(0.8, 0.9);                                                           // metres inside the window opening, 1.4 x 1.5
+        if (m.x > 0.0 && m.x < 1.4 && m.y > 0.0 && m.y < 1.5) {
+          col = vec3(0.002, 0.003, 0.005);                                                     // dark glass
+          if (abs(m.x - 0.7) < 0.035 || abs(m.y - 1.05) < 0.03) col = vec3(0.008);              // its frame
+          if (fl == litFloor && bay == litBay) {
+            col = vec3(0.105, 0.066, 0.024) * (0.55 + 0.45 * m.y / 1.5);                       // a weak bulb under the ceiling
+            if (m.x < 0.26) col *= 0.45;                                                       // a curtain
+            float k = mix(1.0, 1.32, near); vec2 c = vec2(0.86, 0.0);                          // the shape: head and shoulders above the sill
+            float head = length((m - vec2(c.x, 0.74 * k)) / vec2(0.105 * k, 0.135 * k));
+            float body = max(abs(m.x - c.x) - (0.23 * k - 0.12 * max(m.y - 0.3 * k, 0.0)), m.y - 0.58 * k);
+            if (head < 1.0 || body < 0.0) col = vec3(0.0015);
+          }
+        }
+        dist = tF;
+      }
+      // the lamp post stands between here and there: it slides across the facade as you move
+      float tp = dot(LAMP.xz - o.xz, d.xz) / max(dot(d.xz, d.xz), 1e-5);
+      if (tp > 0.0 && tp < dist) { vec3 c = o + d * tp; if (c.y < LAMP.y && c.y > 0.0 && length(c.xz - LAMP.xz) < 0.07) col = vec3(0.004); }
+      col = mix(col, vec3(0.006, 0.008, 0.013), 1.0 - exp(-dist * 0.016));                     // night haze
+      float tl = dot(LAMP - o, d);
+      if (tl > 0.0 && tl < dist + 1.0) { float r = length(LAMP - (o + d * tl)); col += vec3(1.0, 0.60, 0.24) * (1.4 * smoothstep(0.16, 0.04, r) + 0.10 * exp(-r * r / 0.9)); }
+      gl_FragColor = vec4(col * 0.9 + vec3(0.0015, 0.002, 0.0035), 1.0);                         // through old glass
+    }`
+});
 const yard = [];
-function yardWindow(n, x, y) {
-  const c = document.createElement('canvas'); c.width = 240; c.height = 200;
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = THREE.NearestFilter;
-  plane(1.2, 1.0, x, y, LAND_END - 0.01, Math.PI, new THREE.MeshBasicMaterial({ map: t }));
-  yard.push({ n, g: c.getContext('2d'), t, x, y, z: LAND_END });
-}
-function drawYard(w, rel, near) {   // rel: floors between the lit window and this one's own level, up is positive; near: the shape has come up to the glass
-  const g = w.g, W = 240, Hc = 200, ww = 24, wh = 27;
-  g.filter = 'none'; g.fillStyle = '#0b0d11'; g.fillRect(0, 0, W, Hc);
-  for (let i = 0; i < 400; i++) { g.fillStyle = `rgba(0,0,0,${Math.random() * 0.25})`; g.fillRect(Math.random() * W, Math.random() * Hc, 3, 2); }   // rough panel wall
-  for (let r = -2; r <= 2; r++) for (let c = 0; c < 5; c++) {
-    const x = (c + 0.5) * W / 5 - ww / 2, y = Hc / 2 - r * Hc / 4 - wh / 2, lit = r === rel && c === 1;   // the plane is mirrored, so column 1 shows right of centre
-    g.fillStyle = '#030406'; g.fillRect(x, y, ww, wh);
-    g.strokeStyle = '#14171c'; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, ww - 1, wh - 1);
-    if (lit) {
-      const gr = g.createLinearGradient(x, y, x + ww, y + wh); gr.addColorStop(0, '#4a3719'); gr.addColorStop(1, '#2c200e');
-      g.fillStyle = gr; g.fillRect(x + 1, y + 1, ww - 2, wh - 2);                               // a weak bulb somewhere inside
-      g.fillStyle = 'rgba(20,14,6,.75)'; g.fillRect(x + 1, y + 1, 5, wh - 2);                    // a curtain
-      const k = near ? 1.4 : 1, cx = x + ww * 0.42, by = y + wh - 1;
-      g.save(); g.beginPath(); g.rect(x + 1, y + 1, ww - 2, wh - 2); g.clip(); g.filter = 'blur(0.7px)'; g.fillStyle = '#050403';
-      g.beginPath(); g.ellipse(cx, by - 12.5 * k, 2.3 * k, 3.1 * k, 0, 0, 7); g.fill();          // head
-      g.beginPath(); g.moveTo(cx - 4.2 * k, by + 1); g.lineTo(cx - 3.6 * k, by - 8.5 * k); g.lineTo(cx + 3.6 * k, by - 8.5 * k); g.lineTo(cx + 4.2 * k, by + 1); g.fill();   // shoulders, down to the sill
-      g.restore(); g.filter = 'none';
-    }
-  }
-  g.fillStyle = 'rgba(14,22,38,.14)'; g.fillRect(0, 0, W, Hc);                                  // the glass itself
-  w.t.needsUpdate = true;
-}
+function yardWindow(n, x, y) { plane(1.2, 1.0, x, y, LAND_END - 0.01, Math.PI, mYard); yard.push({ n, x, y, z: LAND_END }); }
 const mPanel = mat({ map: labelTex('ЩЭ', { bg: '#59605c', font: 'bold 40px Arial', color: '#b33' }) });
 for (let n = 0; n < FLOORS; n++) {
   const y0 = n * H, yc = y0 + H / 2;
@@ -1088,17 +1114,19 @@ function updateTrail(dt, moving) {
   }
 }
 
-// The lit window across the yard keeps level with the player. A landing window n looks out at floor n + 1, so each one
-// shows the lit window in a different row; all of them are redrawn only while they are off screen. From the fourth
-// level the shape is a little bigger, as if it had stepped up to the glass. While it is looked at, nothing moves.
+// The lit window opposite is always on the floor level with the player's eyes, and in the flat that lies on the line
+// from the player through the nearest landing window, so that it is there whenever they turn to look. It is moved
+// only while every window near the player is off screen. From the fourth level the shape in it is a little bigger,
+// as if it had stepped up to the glass. While it is looked at, nothing moves.
+const yardNow = { fl: -1, bay: 0, near: -1 };
 function updateYard() {
-  const lf = Math.min(TOP, Math.round((P.y + 1.5) / H)), near = SHOW.has('window') || Math.floor((P.y + 0.05) / H) >= 4;
-  for (const w of yard) {
-    const rel = lf - (w.n + 1), key = (Math.abs(rel) <= 2 ? rel : 'none') + (near ? 'n' : 'f');
-    if (w.key === key) continue;
-    if (w.key !== undefined && !unseen(w.x, w.y, w.z)) continue;
-    drawYard(w, rel, near); w.key = key;
-  }
+  const eye = camera.position, fl = clamp(Math.round((P.y + 0.02) / H), 0, TOP), near = SHOW.has('window') || Math.floor((P.y + 0.05) / H) >= 4 ? 1 : 0;
+  const wx = yard[0].x, dz = Math.max(LAND_END - eye.z, 0.4);
+  const bay = Math.floor((eye.x + (wx - eye.x) * (dz + YARD.depth) / dz - YARD.x0) / YARD.bay);
+  if (fl === yardNow.fl && bay === yardNow.bay && near === yardNow.near) return;
+  if (yardNow.fl >= 0 && yard.some(w => Math.abs(w.y - eye.y) < 7 && !unseen(w.x, w.y, w.z))) return;
+  yardNow.fl = fl; yardNow.bay = bay; yardNow.near = near;
+  yardU.litFloor.value = fl; yardU.litBay.value = bay; yardU.near.value = near;
 }
 
 // Changed behind your back. Once per run, on the empty floor without the darkness: the door right by the stairs,
@@ -1242,7 +1270,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail, yard, behind, get changing() { return changing; } };
+window.__g = { P, F, lamps, A, start, free, ground, doors, gates, S, pressSwitch, ORDER, B, L, E, C, G, fingers, pk, startPeek, floorTime, D, DARK_FLOOR, FLICKER_FLOOR, torch, trail, yard, yardNow, behind, get changing() { return changing; } };
 </script>
 </body>
 </html>
