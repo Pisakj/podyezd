@@ -467,7 +467,7 @@ function initAudio() {
   const hum = ctx.createOscillator(); hum.type = 'sawtooth'; hum.frequency.value = 100;
   const hf = ctx.createBiquadFilter(); hf.type = 'lowpass'; hf.frequency.value = 500;
   A.hum = ctx.createGain(); A.hum.gain.value = 0.006; hum.connect(hf).connect(A.hum).connect(A.master); hum.start();
-  // tension: low drone and a thin high tone that grow as the follower closes in
+  // tension: low drone that grows as the follower closes in
   A.drone = ctx.createGain(); A.drone.gain.value = 0;
   for (const f of [55, 58.2, 82.7]) { const o = ctx.createOscillator(); o.frequency.value = f; o.connect(A.drone); o.start(); }
   A.drone.connect(A.master);
@@ -479,8 +479,6 @@ function initAudio() {
     m.mod = ctx.createGain(); m.dist = ctx.createGain(); m.dist.gain.value = 0; m.pan = panner(new THREE.Vector3());
     n.connect(ng).connect(m.bp); m.osc.connect(m.bp); m.bp.connect(lp).connect(m.mod).connect(m.dist).connect(m.pan).connect(A.master);
     n.start(); m.osc.start(); }
-  A.ring = ctx.createGain(); A.ring.gain.value = 0;
-  { const o = ctx.createOscillator(); o.frequency.value = 3140; o.connect(A.ring).connect(A.master); o.start(); }
 }
 function setPos(p, v) { if (p.positionX) { p.positionX.value = v.x; p.positionY.value = v.y; p.positionZ.value = v.z; } else p.setPosition(v.x, v.y, v.z); }
 function panner(v) { const p = A.ctx.createPanner(); p.panningModel = 'HRTF'; p.rolloffFactor = 0; setPos(p, v); return p; }
@@ -582,7 +580,6 @@ function updateFollower(dt, moving) {
     thud({ gain: g, cutoff: 110, f0: 62, f1: 36, noise: 0.1, len: 0.1, send: 0 }); thud({ gain: g * 0.7, cutoff: 110, f0: 55, f1: 34, noise: 0.1, len: 0.1, send: 0, delay: 0.15 }); } }
   const now = A.ctx.currentTime;
   A.drone.gain.setTargetAtTime(0.02 + 0.2 * F.c * F.c, now, 0.4);
-  A.ring.gain.setTargetAtTime(0.012 * Math.pow(F.c, 3), now, 0.4);
 }
 
 // ---------- world randomness ----------
