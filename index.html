@@ -19,6 +19,14 @@
   #paper ol { margin: 0; padding-left: 24px; }
   #paper .sign { margin-top: 16px; text-align: right; font-style: italic; }
   #paper .close { margin-top: 14px; text-align: center; font-size: 12px; color: #6d675a; }
+  #paper li.x { text-decoration: line-through; text-decoration-color: #7a1612; text-decoration-thickness: 2px; color: #6b665a; }
+  #paper .hand { font-family: 'Marker Felt', 'Comic Sans MS', cursive; color: #1c2c6b; font-size: 17px; margin-top: 10px; transform: rotate(-2deg); }
+  #end { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+  #end p { opacity: 0; margin: 10px; font-size: 21px; color: #a9a392; animation: fin 3s forwards; }
+  #end p:nth-child(1) { animation-delay: 3s; } #end p:nth-child(2) { animation-delay: 7s; } #end p:nth-child(3) { animation-delay: 11s; }
+  #end h1 { opacity: 0; font-weight: normal; font-size: 46px; letter-spacing: .5em; margin: 40px 0 0 .5em; color: #b9b3a2; animation: fin 4s 16s forwards; }
+  #end small { opacity: 0; margin-top: 26px; color: #5d5a51; animation: fin 3s 21s forwards; }
+  @keyframes fin { to { opacity: 1; } }
 </style>
 </head>
 <body>
@@ -26,6 +34,7 @@
 <div id="hint"></div>
 <div id="msg"></div>
 <div id="paper"></div>
+<div id="end"><p>Ты дома.</p><p>За дверью тихо.</p><p>Он тоже дошёл.</p><h1>ПОДЪЕЗД</h1><small>R — пройти снова</small></div>
 <div id="overlay">
   <h1>ПОДЪЕЗД</h1>
   <p>WASD — идти · мышь — смотреть · E — действие</p>
@@ -83,6 +92,7 @@ const post = new THREE.ShaderMaterial({
       vec2 uv = .5 + c * (1.0 - 0.05 * r2);
       float ca = (0.004 + 0.012 * fear) * r2;
       vec3 col = vec3(texture2D(t, uv + c * ca).r, texture2D(t, uv).g, texture2D(t, uv - c * ca).b);
+      col = max(col, 0.0); col = col * 1.25 / (1.0 + col);   // keep the torch from blowing out up close
       col = pow(max(col, 0.0), vec3(1.0 / 2.2));
       float l = dot(col, vec3(.3, .59, .11));
       col = mix(vec3(l), col, 0.85 - 0.35 * fear);
@@ -105,7 +115,7 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // the player's phone torch: the only light that casts shadows
-const TORCH = 15;
+const TORCH = 12;
 const torch = new THREE.SpotLight(0xdde6ff, TORCH, 0, 0.5, 0.75, 1.7);
 torch.position.set(0.24, -0.2, 0.1); camera.add(torch); camera.add(torch.target); torch.target.position.set(0, -0.06, -1);
 torch.castShadow = true; torch.shadow.mapSize.set(1024, 1024); torch.shadow.camera.near = 0.1; torch.shadow.camera.far = 14;
@@ -243,6 +253,125 @@ function graffiti(x, y, z, ry) {
   p.rotation.z = rand(-0.12, 0.12);
 }
 
+// ---------- puzzles ----------
+// which puzzle sits on floors 1..3. Random per run; ?order=switch,back,loop fixes it for testing
+const qOrder = new URLSearchParams(location.search).get('order');
+const ORDER = qOrder ? qOrder.split(',') : (() => { const a = ['switch', 'back', 'loop']; for (let i = 2; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; })();
+const puzzleOf = n => ORDER[n - 1];
+const gates = {};
+const mGate = mat({ color: 0x2b2420 });
+function buildGate(n, hint) {   // barred door across the flight up
+  const y0 = n * H, g = new THREE.Group(); g.position.set(SW - 0.02, y0, 0); world.add(g);
+  for (let k = 0; k < 10; k++) box(0.025, 2.05, 0.025, -0.04 - k * 0.125, 1.035, 0, mGate, g);
+  for (const y of [0.04, 1.0, 2.05]) box(1.17, 0.04, 0.03, -0.6, y, 0, mGate, g);
+  box(0.1, 0.16, 0.06, -1.1, 1.05, 0, mMetal, g);
+  box(SW - AX0, 0.05, 0.04, AXC, y0 + 2.12, 0, mGate);
+  for (let k = 0; k < 10; k++) box(0.025, 0.68, 0.025, SW - 0.06 - k * 0.125, y0 + 2.46, 0, mGate);
+  box(0.05, 2.8, 0.05, AX0, y0 + 1.4, 0, mGate);
+  const gate = gates[n] = { g, y0, closed: true, target: 0, tries: 0, pos: new THREE.Vector3(AXC, y0 + 1.1, 0) };
+  interact.push({ pos: gate.pos, label: 'открыть', on: () => gate.closed, act: () => { gateRattle(gate.pos); say(++gate.tries > 2 ? hint : 'Решётка заперта.'); } });
+  return gate;
+}
+// puzzle 1: the switch turns off the sound, not the light. In the silence the wall tells you the gate is open
+const S = { floor: 0, silent: false, solved: false };
+function buildSwitchPuzzle(n) {
+  const y0 = n * H; S.floor = n; S.gate = buildGate(n, 'Замка на ней нет. Её держит что-то другое.');
+  box(0.09, 0.09, 0.03, -0.3, y0 + 1.45, -0.015, mat({ color: 0xbdb8a8 }));
+  S.rocker = box(0.04, 0.055, 0.02, -0.3, y0 + 1.45, -0.035, mat({ color: 0xd8d3c2 })); S.rocker.rotation.x = 0.35;
+  S.writing = plane(1.5, 0.6, -1.25, y0 + 1.33, -0.007, Math.PI, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0,
+    map: labelTex('ПОКА ТИХО —\nОТКРЫТО', { w: 512, h: 205, font: 'bold 62px "Marker Felt", "Comic Sans MS", cursive', color: 'rgba(205,195,170,.95)', lh: 78 }) }));
+  interact.push({ pos: new THREE.Vector3(-0.3, y0 + 1.45, 0), label: 'выключатель', act: pressSwitch });
+}
+function setSilent(v) {
+  S.silent = v; const now = A.ctx.currentTime;
+  S.rocker.rotation.x = v ? -0.35 : 0.35;
+  if (v) { tick(900, 0.08); A.master.gain.setTargetAtTime(0, now + 0.06, 0.015); }
+  else { A.master.gain.setTargetAtTime(0.9, now, 0.4); tick(900, 0.08, 0.05); }
+  S.gate.target = v ? -1.35 : 0;
+}
+function pressSwitch() {
+  if (S.solved) { tick(900, 0.08); say('Щёлкает вхолостую.'); return; }
+  setSilent(!S.silent);
+}
+function updatePuzzles(dt) {
+  for (const k in gates) {
+    const gt = gates[k], a = gt.g.rotation.y;
+    if (a !== gt.target) { const na = a + clamp(gt.target - a, -dt * 0.7, dt * 0.7); gt.g.rotation.y = na; if (na === 0) clang(gt.pos); }
+    gt.closed = gt.g.rotation.y > -0.9;
+  }
+  if (S.floor) {
+    const m = S.writing.material; m.opacity = clamp(m.opacity + (S.silent ? dt / 2.5 : -dt / 1.2), 0, 1);
+    // through the gate and up to the landing: the sound comes back, the gate shuts behind
+    if (S.silent && P.z > RUN && P.y > S.floor * H + 1.3 && P.y < S.floor * H + 2) { S.solved = true; setSilent(false); }
+  }
+}
+
+// puzzle 2: the gate opens only after you have stood with your back to it for 3 seconds
+const B = { floor: 0, t: 0, solved: false };
+function updateBack(dt) {
+  if (!B.floor || B.solved) return;
+  const gt = B.gate, dx = gt.pos.x - P.x, dz = gt.pos.z - P.z, d = Math.hypot(dx, dz);
+  const facing = (dx * -Math.sin(P.yaw) + dz * -Math.cos(P.yaw)) / d;
+  const ok = Math.abs(P.y - gt.y0) < 0.2 && P.z < 0 && d < 2.6 && facing < -0.5 && P.speed < 0.4;
+  const was = B.t; B.t = ok ? B.t + dt : 0;
+  if (was < 1.2 && B.t >= 1.2) creak(gt.pos);          // something behind you starts to move
+  if (B.t >= 3) { B.solved = true; gt.target = -1.35; gateCreak(gt.pos); }
+}
+// puzzle 3: the flight up brings you back to the same floor; walking down takes you up
+const L = { floor: 0, count: 0, solved: false };
+let blinkT = 0;
+function updateLoop(pz) {
+  const n = L.floor, mid = RUN / 2;
+  if (!n || L.solved || P.x > MIDX || P.z <= 0 || P.z >= RUN) return;
+  if (pz >= mid && P.z < mid && Math.abs(P.y - (n * H + 2.25)) < 0.5) {         // climbing: back you go
+    P.y -= H; blinkT = 0.22; tick(1600, 0.03); L.count++;
+    if (L.count === 2) setTimeout(() => say('Снова тот же этаж.'), 2500);
+    if (L.count === 4) setTimeout(() => say('Вверх не пускает.'), 2500);
+  } else if (pz <= mid && P.z > mid && Math.abs(P.y - (n * H - 0.75)) < 0.5) {  // descending: one floor higher
+    P.y += H; blinkT = 0.22; tick(1600, 0.03); L.solved = true;
+  }
+}
+// rules sheets: every floor crosses out more, adds two handwritten lines, one of them lies
+const CROSS = { switch: [5, 1], back: [2], loop: [3, 0] };
+const NOTES = {
+  switch: ['Выключатель трогать можно. Он не про свет.', 'В тишине он тебя не слышит.'],
+  back: ['Решётка не откроется, пока на неё смотрят.', 'Обернёшься на лестнице — увидишь его.'],
+  loop: ['Наверх здесь — это вниз.', 'Заблудился — стой и жди.'],
+};
+function sheetFor(n) {
+  const crossed = new Set(); let notes = [];
+  for (let k = 1; k <= Math.min(n, 3); k++) CROSS[puzzleOf(k)].forEach(i => crossed.add(i));
+  if (n >= 1 && n <= 3) { notes = NOTES[puzzleOf(n)].slice(); if (sheetFlip[n]) notes.reverse(); }
+  if (n === 4) { for (let i = 0; i < 6; i++) crossed.add(i); notes = ['Он подождёт.']; }
+  return { crossed, notes };
+}
+const sheetFlip = [0, 1, 2, 3, 4].map(() => Math.random() < 0.5);
+// finale: 10 seconds at your own door
+const E = { t: -1, ended: false, fade: 1 };
+function startFinale() {
+  if (E.t >= 0 || E.ended) return;
+  E.t = 0; E.c0 = F.c; F.active = true;
+  for (let i = 0; i < 7; i++) tick(rand(2400, 4200), 0.03, i * 0.07 + rand(0, 0.03));
+  say('Ключ. Руки не слушаются.');
+}
+function updateFinale(dt) {
+  if (E.ended) { E.fade = Math.max(0, E.fade - dt / 1.2); return; }
+  if (E.t < 0) return;
+  if (Math.hypot(P.x - 1.0, P.z + HALL_D) > 1.6) { E.t = -1; say('Ключ остался в замке. Вернись к двери.'); return; }
+  const was = E.t; E.t += dt; F.c = Math.max(F.c, lerp(E.c0, 1, Math.min(1, E.t / 9.2)));
+  const at = x => was < x && E.t >= x;
+  if (at(2.2)) for (let i = 0; i < 4; i++) tick(rand(1800, 2600), 0.03, i * 0.11);
+  if (at(4.5)) { sfxClunk(); say('Один оборот.'); }
+  if (at(7.6)) { sfxClunk(); say('Второй.'); }
+  if (E.t >= 10) {
+    E.ended = true; elMsg.style.opacity = 0; elHint.style.opacity = 0;
+    thud({ gain: 0.9, cutoff: 700, f0: 90, f1: 35, len: 0.35, send: 0.8, delay: 0.5 });
+    A.master.gain.setTargetAtTime(0, A.ctx.currentTime + 1.6, 0.8);
+    document.exitPointerLock && document.exitPointerLock();
+    document.getElementById('end').style.display = 'flex';
+  }
+}
+
 // ---------- build ----------
 const mWin = new THREE.MeshBasicMaterial({ color: 0x0c1524 });
 const mPanel = mat({ map: labelTex('ЩЭ', { bg: '#59605c', font: 'bold 40px Arial', color: '#b33' }) });
@@ -299,7 +428,11 @@ for (let n = 0; n < FLOORS; n++) {
     buildDoor(SW - 0.01, y0, -1.3, -Math.PI / 2, doorMats[(n * 3 + 2) % 5], nums[2], n);
     plane(0.7, 0.7, -1.6, y0 + 2.1, -0.006, Math.PI, mat({ map: labelTex(String(n + 1), { w: 128, h: 128, font: 'bold 110px Arial', color: 'rgba(25,40,34,.8)' }), transparent: true }));
     box(0.55, 0.75, 0.12, -2.6, y0 + 1.5, -0.06, [mMetal, mMetal, mMetal, mMetal, mMetal, mPanel]);
-    if (n !== 2) graffiti(-0.45, y0 + 1.25, -HALL_D + 0.006, 0);
+    plane(0.4, 0.56, -0.45, y0 + 1.5, -HALL_D + 0.006, 0, mat({ map: paperTexture(true) }));
+    interact.push({ pos: new THREE.Vector3(-0.45, y0 + 1.5, -HALL_D), label: 'прочитать', act: () => togglePaper(true, n) });
+    if (puzzleOf(n) === 'switch') buildSwitchPuzzle(n);
+    if (puzzleOf(n) === 'back') { B.floor = n; B.gate = buildGate(n, 'Пока смотришь на неё — не откроется.'); }
+    if (puzzleOf(n) === 'loop') L.floor = n;
   }
 
   if (n < FLOORS - 1) {
@@ -331,7 +464,7 @@ for (let n = 0; n < FLOORS; n++) {
   } else {
     // top floor: no flight up
     box(SW - BX1, H, 0.1, (SW + BX1) / 2, yc, 0.05, mWallBand);
-    interact.push({ pos: new THREE.Vector3(1.0, y0 + 1.2, -HALL_D), label: 'достать ключ', act: () => say('Твоя дверь. Ключ в кармане. (Финал появится на следующих этапах.)', 5) });
+    interact.push({ pos: new THREE.Vector3(1.0, y0 + 1.2, -HALL_D), label: 'достать ключ', on: () => E.t < 0 && !E.ended, act: startFinale });
   }
   // rail across the well at hall level
   if (n > 0) { box(AX0 - BX1, 0.05, 0.05, MIDX, y0 + 0.92, -0.03, mRail); for (let k = 0; k < 4; k++) box(0.02, 0.9, 0.02, BX1 + 0.05 + k * 0.17, y0 + 0.45, -0.03, mMetal); }
@@ -347,12 +480,18 @@ lift.strip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 1, 0.02), new THREE.Mesh
 lift.strip.position.set(-HALL_W + 0.105, 0, -1.3); lift.strip.visible = false; world.add(lift.strip);
 lift.light = new THREE.PointLight(0xffd9a0, 0, 4, 2); lift.light.position.set(-HALL_W + 0.5, 0, -1.3); world.add(lift.light);
 
-function paperTexture() {
+function paperTexture(marks) {
   return tex(256, 360, (g, w, h) => {
     g.fillStyle = '#cfc8ae'; g.fillRect(0, 0, w, h);
     g.fillStyle = '#222'; g.font = 'bold 17px Courier New'; g.textAlign = 'center'; g.fillText('ПРАВИЛА ПОДЪЕЗДА', w / 2, 34);
     g.fillStyle = 'rgba(30,30,30,.75)';
     for (let i = 0; i < 7; i++) { g.fillRect(24, 62 + i * 34, rand(150, 205), 3); g.fillRect(24, 72 + i * 34, rand(60, 180), 3); }
+    if (marks) {
+      g.strokeStyle = 'rgba(120,20,16,.85)'; g.lineWidth = 3;
+      for (let i = 0; i < 3; i++) { const y = 66 + Math.floor(rand(0, 7)) * 34; g.beginPath(); g.moveTo(18, y + rand(-3, 3)); g.lineTo(225, y + rand(-3, 3)); g.stroke(); }
+      g.strokeStyle = 'rgba(28,44,107,.85)'; g.lineWidth = 2;
+      for (let j = 0; j < 2; j++) { g.beginPath(); for (let x = 30; x < 215; x += 6) g.lineTo(x, 312 + j * 20 + rand(-4, 4)); g.stroke(); }
+    }
     grime(g, w, h, 10, 0.1);
   });
 }
@@ -370,6 +509,8 @@ function ground(x, z, y) {
 }
 function free(x, z, y) {
   if (z < -HALL_D + R || z > LAND_END - R) return false;
+  const gt = gates[Math.round(y / H)];
+  if (gt && gt.closed && x > MIDX && Math.abs(z) < R + 0.03 && Math.abs(y - gt.y0) < 0.7) return false;
   if (z <= -R) { if (x < -HALL_W + R || x > SW - R) return false; }
   else {
     if (x < R || x > SW - R) return false;
@@ -385,7 +526,7 @@ function free(x, z, y) {
 const P = { x: -1.9, y: 0, z: -1.7, yaw: Math.PI, pitch: 0, walked: 0, stepAcc: 0, bob: 0, speed: 0 };
 const keys = {};
 let started = false, running = false, hadLock = false, reading = false, T = 0;
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyE' && running && !e.repeat) doAction(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyE' && running && !e.repeat && !E.ended) doAction(); if (e.code === 'KeyR' && E.ended) location.reload(); });
 addEventListener('keyup', e => { keys[e.code] = false; });
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
@@ -403,7 +544,7 @@ overlay.addEventListener('click', start);
 renderer.domElement.addEventListener('click', () => { if (running && !document.pointerLockElement) start(); });
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement) { hadLock = true; return; }
-  if (hadLock && running) {
+  if (hadLock && running && !E.ended) {
     running = false; for (const k in keys) keys[k] = false;
     document.getElementById('go').textContent = 'Пауза. Нажми, чтобы вернуться';
     overlay.style.display = 'flex'; A.ctx && A.ctx.suspend();
@@ -423,9 +564,13 @@ const RULES = [
   'Выключатели не трогать.',
   'Дверь в квартиру открывайте не спеша.',
 ];
-function togglePaper(on) {
+function togglePaper(on, n = 0) {
   reading = on;
-  if (on) elPaper.innerHTML = '<h2>ПРАВИЛА ПОДЪЕЗДА</h2><ol>' + RULES.map(r => `<li>${r}</li>`).join('') + '</ol><div class="sign">Управдом</div><div class="close">E — отойти</div>';
+  if (on) {
+    const sh = sheetFor(n);
+    elPaper.innerHTML = '<h2>ПРАВИЛА ПОДЪЕЗДА</h2><ol>' + RULES.map((r, i) => `<li class="${sh.crossed.has(i) ? 'x' : ''}">${r}</li>`).join('') + '</ol>'
+      + sh.notes.map(t => `<div class="hand">${t}</div>`).join('') + '<div class="sign">Управдом</div><div class="close">E — отойти</div>';
+  }
   elPaper.style.display = on ? 'block' : 'none';
 }
 let target = null;
@@ -434,6 +579,7 @@ function findTarget() {
   camera.getWorldDirection(vDir);
   let best = null, bd = 1.8;
   for (const it of interact) {
+    if (it.on && !it.on()) continue;
     vTo.copy(it.pos).sub(camera.position); const d = vTo.length();
     if (d < bd && vTo.normalize().dot(vDir) > 0.78) { bd = d; best = it; }
   }
@@ -527,6 +673,16 @@ function liftSound(pos) {
   o.start(t); n.start(t); o.stop(t + 7.1); n.stop(t + 7.1);
   thud({ gain: 0.5, cutoff: 500, f0: 90, f1: 40, len: 0.2, send: 0.7, pos, delay: 7 });
 }
+function gateCreak(pos) {   // long hinge creak
+  const ctx = A.ctx, t = ctx.currentTime, o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain(), p = panner(pos);
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(240, t); o.frequency.linearRampToValueAtTime(330, t + 0.8); o.frequency.linearRampToValueAtTime(210, t + 1.9);
+  f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 5;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.12, t + 0.2); g.gain.linearRampToValueAtTime(0.06, t + 1.5); g.gain.linearRampToValueAtTime(0, t + 2);
+  o.connect(f).connect(g).connect(p).connect(A.master); const sd = ctx.createGain(); sd.gain.value = 0.6; p.connect(sd).connect(A.conv);
+  o.start(t); o.stop(t + 2.05);
+}
+function gateRattle(pos) { for (let i = 0; i < 3; i++) thud({ gain: 0.4, cutoff: 2600, f0: rand(260, 340), f1: 150, thump: 0.5, noise: 0.7, len: 0.09, send: 0.7, pos, delay: i * 0.13 }); }
+function clang(pos) { thud({ gain: 0.8, cutoff: 2800, f0: 320, f1: 110, thump: 0.7, noise: 0.8, len: 0.3, send: 1, pos }); tick(740, 0.05, 0.02); tick(1130, 0.03, 0.04); }
 function sfxClunk() { thud({ gain: 0.5, cutoff: 900, f0: 160, f1: 70, send: 0.5 }); tick(420, 0.05, 0.03); }
 function selfStep(onStairs) {
   thud({ gain: 0.2 + Math.random() * 0.05, cutoff: onStairs ? 1500 : 2100, f0: rand(120, 150), f1: 60, thump: 0.45, noise: 0.5, len: 0.07, send: 0.3 });
@@ -586,7 +742,7 @@ function updateFollower(dt, moving) {
 let blackoutT = rand(25, 50), farT = rand(12, 25), eventCd = 8, murT = 0;
 const murDoors = {}; for (let n = 1; n <= 3; n++) { const ds = doors.filter(d => d.floor === n); murDoors[n] = ds[Math.floor(Math.random() * ds.length)]; }
 function updateWorld(dt) {
-  blackoutT -= dt;
+  blackoutT -= dt; blinkT -= dt;
   if (blackoutT <= 0) {
     blackoutT = rand(25, 70);
     let best = null, bd = 1e9;
@@ -606,7 +762,7 @@ function updateWorld(dt) {
       f = l.on ? rand(0.85, 1) : 0.04;
     }
     if (l.off > 0) { l.off -= dt; f = 0; if (l.off <= 0) tick(1500, 0.03); }
-    if (dark) f = 0;
+    if (dark || blinkT > 0) f = 0;
     f *= 1 - 0.45 * F.c * F.c;
     if (F.arrived && Math.abs(l.light.position.y - P.y - 2.4) < 1.2) f *= rand(0.35, 0.6);
     l.light.intensity = l.base * f;
@@ -622,6 +778,7 @@ function updateWorld(dt) {
     if (d.lit && !d.peeped && dist < 1.3 && dot > 0.92) { d.peeped = true; if (Math.random() < 0.3) setTimeout(() => { d.peep.material.color.set(0x030303); creak(d.pos); }, 600); }
     if (!d.knocked && dot < -0.3 && eventCd <= 0) { d.knocked = true; if (Math.random() < 0.35) { eventCd = 45; rattle(d.pos); } }
   }
+  updatePuzzles(dt);
   // lift cabin passes behind the closed doors
   if (lift.state === 0 && Math.abs(P.y - lift.floor * H) < 0.2 && P.z < -0.5) { lift.state = 1; lift.t = -2.5; }
   if (lift.state === 1) {
@@ -658,7 +815,7 @@ function frame() {
   if (running) {
     T += dt;
     const px = P.x, pz = P.z;
-    if (!reading) {
+    if (!reading && !E.ended) {
       const fw = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
       const st = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
       if (fw || st) {
@@ -670,6 +827,7 @@ function frame() {
         if (free(P.x, P.z + dz, P.y)) P.z += dz;
       }
     }
+    updateLoop(pz);
     const dist = Math.hypot(P.x - px, P.z - pz);
     P.speed = lerp(P.speed, dist / dt, 0.3);
     const moving = P.speed > 0.4;
@@ -684,10 +842,11 @@ function frame() {
     camera.position.set(P.x, P.y + EYE + Math.sin(P.bob / stride * Math.PI) * 0.022, P.z);
     camera.rotation.set(P.pitch, P.yaw, 0);
     let tf = 1 - 0.6 * F.c * F.c; if (F.arrived) tf *= Math.random() < 0.15 ? 0.1 : 0.45;
-    torch.intensity = TORCH * tf;
+    torch.intensity = blinkT > 0 ? 0 : TORCH * tf;
     torch.target.position.set(Math.sin(T * 0.9) * 0.025, -0.06 + Math.sin(P.bob * 4.6) * 0.015, -1);
     post.uniforms.time.value = T; post.uniforms.fear.value = F.c;
-    updateFollower(dt, moving);
+    updateFollower(dt, E.t >= 0 ? false : moving);
+    updateBack(dt); updateFinale(dt); post.uniforms.fade.value = E.fade;
     updateWorld(dt);
     updateListener();
     findTarget();
@@ -699,7 +858,7 @@ function frame() {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 frame();
-window.__g = { P, F, lamps, A, start, free, ground, doors, lift };
+window.__g = { P, F, lamps, A, start, free, ground, doors, lift, gates, S, pressSwitch, ORDER, B, L, E };
 </script>
 </body>
 </html>

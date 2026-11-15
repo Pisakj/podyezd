@@ -16,6 +16,11 @@ Needs internet once for three.js (jsDelivr CDN, r160). No build step, no assets.
 - follower: `F.c` closeness 0..1, grows while standing, shrinks while walking
 - `window.__g` exposes state for testing in the console
 
+## Testing
+
+`?order=switch,back,loop` fixes which puzzle is on floors 1-3 (random otherwise).
+A full run can be scripted through `window.__g` (player state, puzzle state) with synthetic key events.
+
 ## Status
 
-Stage 1 done: movement, stairs, follower. Next: puzzles one at a time, changing rules sheet, finale.
+Whole game is in: follower, three puzzles in random order, changing rules sheets, finale. Now: fixing issues from playtests.
