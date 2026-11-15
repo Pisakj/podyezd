@@ -738,6 +738,9 @@ function initAudio() {
   A.drone = ctx.createGain(); A.drone.gain.value = 0;
   for (const f of [55, 58.2, 82.7]) { const o = ctx.createOscillator(); o.frequency.value = f; o.connect(A.drone); o.start(); }
   A.drone.connect(A.master);
+  // Shepard tone: six sines an octave apart, played on the floor with the loop
+  A.shep = { g: ctx.createGain(), p: 0, oscs: [] }; A.shep.g.gain.value = 0; A.shep.g.connect(A.master);
+  for (let i = 0; i < 6; i++) { const o = ctx.createOscillator(), g = ctx.createGain(); g.gain.value = 0; o.connect(g).connect(A.shep.g); o.start(); A.shep.oscs.push({ o, g }); }
   // recorded sounds
   A.buf = {};
   Promise.all(Object.keys(window.SND || {}).map(k => {
@@ -986,6 +989,22 @@ function updateFollower(dt, moving) {
   A.drone.gain.setTargetAtTime(mute ? 0 : 0.2 * Math.max(0, F.c - 0.45), now, mute ? 0.03 : 0.4);
 }
 
+// On the floor where the stairs loop, an endlessly falling tone, at the edge of hearing, until the loop is broken.
+// Each sine slides down an octave every 20 s and wraps from the bottom to the top; a bell-shaped level over pitch hides the wrap.
+const SHEPARD_GAIN = param('shepard', 0.012);
+function updateShepard(dt) {
+  const sh = A.shep, now = A.ctx.currentTime;
+  const on = L.floor > 0 && !L.solved && Math.abs(P.y - L.floor * H) < 1.6;
+  sh.g.gain.setTargetAtTime(on ? SHEPARD_GAIN : 0, now, L.solved ? 0.01 : 1.5);   // solved: cut dead, not faded
+  if (!on) return;
+  sh.p = (sh.p + dt / 20) % 6;
+  sh.oscs.forEach((v, i) => {
+    const pos = ((i - sh.p) % 6 + 6) % 6;   // octaves above 55 Hz, 0..6, always falling
+    v.o.frequency.setValueAtTime(55 * Math.pow(2, pos), now);
+    v.g.gain.setValueAtTime(Math.exp(-Math.pow((pos - 3) / 1.25, 2)), now);
+  });
+}
+
 // ---------- world randomness ----------
 let blackoutT = rand(25, 50), farT = rand(40, 90), eventCd = 8;
 function onFloorOf(test) { const n = Math.round(P.y / H); return Math.abs(P.y - n * H) < 0.75 && test(n); }   // on a floor of that kind, not on the stairs between
@@ -1055,7 +1074,7 @@ function updateWorld(dt) {
     }
   }
   updatePeeker(dt); updateDoorSounds(dt);
-  updatePuzzles(dt);
+  updatePuzzles(dt); updateShepard(dt);
   // lift cabin passes behind the closed doors
   if (lift.state === 0 && Math.abs(P.y - lift.floor * H) < 0.2 && P.z < -0.5) { lift.state = 1; lift.t = -2.5; }
   if (lift.state === 1) {
